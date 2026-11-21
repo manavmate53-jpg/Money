@@ -4,7 +4,6 @@ __pycache__/
 *.pyo
 *.pyd
 *.db-journal
-*.db
 browser_profile/
 data/screenshots/
 .pytest_cache/

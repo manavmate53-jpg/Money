@@ -154,7 +154,31 @@ The instrument is marked **DISQUALIFIED_RISK_OVERFLOW** and excluded from the Ca
 
 ---
 
-## 6. SELF-IMPROVEMENT LOOP & THE TWO-BUCKET PROFIT VAULT
+## 7. HEDGE-FUND MULTI-DESK CADENCE & ZERO-FAILURE GITHUB ACTIONS ARCHITECTURE
+
+To operate institutional quantitative infrastructure without runner state corruption or race conditions, the system separates fast tactical execution from macro structural research and end-of-day risk auditing:
+
+| Desk Cadence | GitHub Actions Trigger | Primary Responsibility | Gemini Model | State Output |
+| :--- | :--- | :--- | :--- | :--- |
+| **1. Execution & Risk Desk** | **Every 1 Hour** (`0 * * * *` UTC) | Intrabay TP/SL check, Break-Even ratchet at $+1.0R$, M15 sniper entry alignment with H4 macro bias | `gemini-2.5-flash` | `reports/LATEST_ADVICE.md`, `data/trading_state.db` |
+| **2. Macro & Regime Desk** | **Every 4 Hours** (`0 */4 * * *` UTC) | H4/H1/M15 Playwright screenshot capture + numerical structure ranking across all indices | `gemini-2.5-pro` (Vision) | `config/macro_bias.json` |
+| **3. Investment Council & Vault** | **Every 24 Hours** (`30 23 * * *` UTC) | Post-mortem audit of closed trades, Bayesian weight mutation, 50% Vault sweep, Epoch auto-reset | `gemini-2.5-pro` (Reflexion) | `config/strategy_weights.json`, `reports/TRAINING_DASHBOARD.md` |
+| **4. On-Demand Advisor** | **Manual Trigger** (`workflow_dispatch`) | Instant scan or custom capital allocation ticket ($100 default) | `gemini-2.5-pro` | `reports/LATEST_ADVICE.md` |
+
+### 7.1 Zero-Failure CI/CD Engineering Safeguards
+1. **Runner Ephemerality & State Persistence**: GitHub Actions runners are ephemeral Ubuntu VMs. The bot commits its SQLite database (`data/trading_state.db`), macro bias map (`config/macro_bias.json`), Bayesian weights (`config/strategy_weights.json`), and Markdown reports (`reports/LATEST_ADVICE.md`, `reports/TRAINING_DASHBOARD.md`) directly back to `main` via `git commit` & `git push`.
+2. **Concurrency Collisions**: All four workflows share the concurrency group:
+   ```yaml
+   concurrency:
+     group: deriv-bot-state-${{ github.ref }}
+     cancel-in-progress: false
+   ```
+   This guarantees runs queue deterministically without race conditions or database corruption.
+3. **Infinite Loop Prevention**: All bot automated commits are tagged with `[skip ci]`, preventing GitHub Actions from re-triggering workflows.
+4. **Git Push Race Protection**: The commit step executes `git pull --rebase origin main` with a 3-attempt exponential backoff loop before pushing.
+5. **Cron Jitter Resilience**: Runner startup lag (5–15 minutes) is neutralized by anchoring all candle timeframes to UTC candle boundaries (`floor_to_1h`, `floor_to_4h`) rather than runner execution start time.
+6. **Headless Browser & WebSocket Ingestion**: Playwright Chromium is initialized with `--with-deps` and paired with a direct WebSocket JSON-RPC client fallback (`wss://ws.derivws.com/websockets/v3`) to guarantee zero cycle abortions even if Deriv's web front-end delays canvas rendering.
+
 
 ```mermaid
 flowchart TD

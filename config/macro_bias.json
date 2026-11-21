@@ -1,0 +1,18 @@
+{
+  "updated_at": "2026-11-21T19:11:37.573719+00:00",
+  "generated_by": "Macro & Regime Desk (Gemini 2.5 Pro Vision + Quantitative Structure)",
+  "instruments": {
+    "1HZ25V": {
+      "symbol": "1HZ25V",
+      "macro_bias": "BULLISH",
+      "confidence_score": 0.8,
+      "primary_regime": "ROTATIONAL_RANGE",
+      "h4_structural_zone": "Zone around 3559.19",
+      "key_invalidation_level": 3436.64,
+      "macro_target": 3804.29,
+      "summary_reasoning": "Deterministic structural bias BULLISH derived from ROTATIONAL_RANGE and SMC swing alignment.",
+      "display_name": "1HZ25V",
+      "nano_lot_viable": true
+    }
+  }
+}

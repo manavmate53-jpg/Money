@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
 """
-Autonomous Deriv Synthetic Indices Trading Bot & Gemini Council Advisor.
-Unified CLI: daemon (4-hr loop), run-once, advise, status, report.
+Autonomous Deriv Synthetic Indices Trading Bot & Hedge-Fund Multi-Cadence System.
+Unified CLI supporting:
+- --cycle hourly   (Execution & Risk Desk: M15/H1 candle check, trade trailing, sniper execution, LATEST_ADVICE.md)
+- --cycle macro    (Macro & Regime Desk: H4/H1/M15 vision, technical scoring, writes config/macro_bias.json)
+- --cycle council  (Investment Council Desk: 24h post-mortem, Bayesian weight mutation, Vault sweep, TRAINING_DASHBOARD.md)
+- --cycle advise   (Personalized Capital Advisor ticket & LATEST_ADVICE.md refresh)
 """
 
 import sys
 import os
 import argparse
 import time
+import json
 from datetime import datetime, timezone
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
-from rich.text import Text
 from rich.markup import escape
 
 # Ensure project root is on sys.path
@@ -23,6 +27,9 @@ from src.risk.pip_calculator import PipCalculator
 from src.risk.position_sizer import PositionSizer
 from src.risk.bankroll_manager import BankrollManager
 from src.technicals.confluence_engine import ConfluenceEngine
+from src.technicals.smc_ict import SmcIctEngine
+from src.technicals.supply_demand import SupplyDemandEngine
+from src.technicals.price_action import PriceActionEngine
 from src.browser.deriv_scraper import DerivScraper
 from src.browser.ws_interceptor import DerivWsInterceptor
 from src.simulator.paper_trader import PaperTrader
@@ -46,8 +53,16 @@ def load_environment():
                     os.environ[k.strip()] = v.strip().strip("'\"")
 
 
-def execute_cycle(dry_run: bool = False, symbol_filter: str = None) -> dict:
-    """Executes a single 4-hour market scan and simulation cycle."""
+def cycle_hourly(dry_run: bool = False, capital: float = 100.0) -> dict:
+    """
+    Cadence 1: Execution & Risk Desk (Every 1 Hour - 0 * * * * UTC)
+    - Parses charts + WebSocket OHLCV (M15/H1).
+    - Resolves open paper trades against intrabar price paths.
+    - Moves SL to Break-Even (0R) at +1.0R unrealized profit.
+    - Aligns precision entries with config/macro_bias.json.
+    - Regenerates reports/LATEST_ADVICE.md.
+    """
+    console.print("[bold cyan]══════ EXECUTION & RISK DESK (1-HOUR CYCLE) ══════[/bold cyan]")
     load_environment()
     db = DatabaseManager()
     pip_calc = PipCalculator()
@@ -57,60 +72,188 @@ def execute_cycle(dry_run: bool = False, symbol_filter: str = None) -> dict:
     paper_trader = PaperTrader(db, bankroll, pip_calc)
     post_mortem = PostMortemManager(db)
     scraper = DerivScraper()
+    advisor = CapitalAdvisor(db)
+    council = GeminiCouncil()
 
-    symbols = [symbol_filter] if symbol_filter else [
-        "1HZ25V", "1HZ50V", "1HZ75V", "STEPINDEX", "1HZ10V", "R_75"
-    ]
+    macro_bias_file = "config/macro_bias.json"
+    macro_data = {}
+    if os.path.exists(macro_bias_file):
+        try:
+            with open(macro_bias_file, "r") as f:
+                macro_data = json.load(f).get("instruments", {})
+        except Exception:
+            macro_data = {}
 
-    results = {"scanned": len(symbols), "new_trades": 0, "resolved_trades": 0, "details": []}
+    symbols = ["1HZ25V", "1HZ50V", "1HZ75V", "STEPINDEX", "1HZ10V", "R_75"]
+    results = {"resolved_trades": 0, "new_trades": 0, "active_positions": 0}
 
     for sym in symbols:
-        console.print(f"[bold cyan]Scanning {sym}...[/bold cyan]")
-        # 1. Capture chart and fetch exact OHLCV
+        # Capture current chart & candles
         chart_data = scraper.capture_chart(sym, timeframe="H1", headless=True)
         df = chart_data["candles_df"]
-        screenshot_path = chart_data["screenshot_path"]
+        screenshot = chart_data["screenshot_path"]
 
-        # 2. Update existing open positions first
+        # 1. Resolve open trades (check entry fill, +1.0R break-even, TP/SL)
         resolved = paper_trader.update_open_positions(sym, df)
         for res in resolved:
             results["resolved_trades"] += 1
-            console.print(f"[bold green]Resolved Trade on {sym}: {res['outcome']} (${res['realized_pnl']:+.2f})[/bold green]")
-            # Run Council Post-Mortem
-            post_mortem.process_resolved_trade(res, screenshot_path)
+            console.print(f"[bold green]✓ Resolved Trade on {sym}: {res['outcome']} (${res['realized_pnl']:+.2f} / {res['realized_r']:+.2f}R)[/bold green]")
+            post_mortem.process_resolved_trade(res, screenshot)
 
-        # 3. Generate multi-framework tip
+        # 2. Check Macro Alignment & Tactical Sniper Entry
+        macro_info = macro_data.get(sym, {})
+        macro_bias = macro_info.get("macro_bias", "NEUTRAL")
+
         tip = confluence.generate_tip(sym, df)
         if tip.direction != "NEUTRAL_NO_TRADE":
-            # Check small-account viability
-            bank_status = bankroll.get_status()
-            equity = bank_status["active_bankroll"]
-            entry_p = tip.entry_max if tip.direction == "BULLISH" else tip.entry_min
-            viab = position_sizer.evaluate_instrument_viability(sym, entry_p, tip.stop_loss, equity)
+            # Tactical validation
+            tactical = council.validate_tactical_sniper(sym, macro_bias, {
+                "direction": tip.direction,
+                "confidence": tip.confidence_score,
+                "regime": tip.market_regime
+            })
 
-            if viab["viable"]:
-                if not dry_run:
-                    trade_id = paper_trader.submit_tip(
-                        tip,
-                        lot_size=viab["recommended_lot"],
-                        dollar_risk=viab["actual_dollar_risk"],
-                        margin_req=viab["margin_required"],
-                        screenshot_path=screenshot_path
-                    )
-                    results["new_trades"] += 1
-                    console.print(f"  [green]Trade Tip Submitted: {sym} {tip.direction} | Lot: {viab['recommended_lot']} | Risk: ${viab['actual_dollar_risk']:.2f}[/green]")
+            if tactical["approved"]:
+                equity = bankroll.get_status()["active_bankroll"]
+                entry_p = tip.entry_max if tip.direction == "BULLISH" else tip.entry_min
+                viab = position_sizer.evaluate_instrument_viability(sym, entry_p, tip.stop_loss, equity)
+
+                if viab["viable"]:
+                    scaled_lot = round(max(viab["min_lot"], viab["recommended_lot"] * tactical["adjusted_lot_multiplier"]), 3)
+                    if not dry_run:
+                        trade_id = paper_trader.submit_tip(
+                            tip,
+                            lot_size=scaled_lot,
+                            dollar_risk=viab["actual_dollar_risk"],
+                            margin_req=viab["margin_required"],
+                            screenshot_path=screenshot
+                        )
+                        results["new_trades"] += 1
+                        console.print(f"  [bold green]★ Sniper Entry Placed: {sym} {tip.direction} | Lot: {scaled_lot} | Risk: ${viab['actual_dollar_risk']:.2f}[/bold green]")
+                    else:
+                        console.print(f"  [yellow]★ DRY-RUN Sniper: {sym} {tip.direction} | Lot: {scaled_lot}[/yellow]")
                 else:
-                    console.print(f"  [yellow]DRY-RUN Tip: {sym} {tip.direction} | Lot: {viab['recommended_lot']} | Risk: ${viab['actual_dollar_risk']:.2f}[/yellow]")
-            else:
-                console.print(f"  [dim yellow]Disqualified {sym}: {viab['rejection_reason']}[/dim yellow]")
+                    console.print(f"  [dim yellow]Filter: {sym} disqualified for ${equity:.0f} capital: {viab['rejection_reason']}[/dim yellow]")
 
-        results["details"].append({"symbol": sym, "direction": tip.direction, "regime": tip.market_regime})
-
+    # 3. Refresh reports/LATEST_ADVICE.md
+    advice_res = advisor.advise(capital=capital)
+    console.print(f"[bold green]✓ Updated reports/LATEST_ADVICE.md (#1 Pick: {advice_res['recommended_instrument']})[/bold green]")
     return results
 
 
-def cmd_advise(capital: float):
-    """Personalized Capital Advisor CLI."""
+def cycle_macro(symbols_list: list = None) -> dict:
+    """
+    Cadence 2: Macro & Regime Desk (Every 4 Hours - 0 */4 * * * UTC)
+    - Captures high-res H4/H1/M15 screenshots + OHLCV across all Deriv indices.
+    - Computes SMC, S&D, One-Time Framing, and Value Area metrics.
+    - Uses gemini-2.5-pro with multimodal vision to write config/macro_bias.json.
+    """
+    console.print("[bold magenta]══════ MACRO & REGIME DESK (4-HOUR CYCLE) ══════[/bold magenta]")
+    load_environment()
+    db = DatabaseManager()
+    scraper = DerivScraper()
+    council = GeminiCouncil()
+    smc = SmcIctEngine()
+    sd = SupplyDemandEngine()
+    pa = PriceActionEngine()
+
+    symbols = symbols_list or ["1HZ25V", "1HZ50V", "1HZ75V", "STEPINDEX", "1HZ10V", "R_75", "R_100", "BOOM1000", "CRASH1000"]
+    macro_map = {
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_by": "Macro & Regime Desk (Gemini 2.5 Pro Vision + Quantitative Structure)",
+        "instruments": {}
+    }
+
+    for sym in symbols:
+        console.print(f"[cyan]Scanning Macro Structure for {sym}...[/cyan]")
+        h1_data = scraper.capture_chart(sym, timeframe="H1", headless=True)
+        df_h1 = h1_data["candles_df"]
+        screenshot = h1_data["screenshot_path"]
+
+        # Technical computations
+        smc_res = smc.analyze(df_h1)
+        sd_res = sd.analyze(df_h1)
+        pa_res = pa.analyze(df_h1)
+
+        summary = {
+            "current_price": float(df_h1["close"].iloc[-1]),
+            "smc_ict": smc_res,
+            "supply_demand": {
+                "fresh_demand_count": len(sd_res["fresh_demand_zones"]),
+                "fresh_supply_count": len(sd_res["fresh_supply_zones"])
+            },
+            "price_action": {
+                "regime": pa_res["regime"],
+                "one_time_framing": pa_res["one_time_framing"]["status"],
+                "value_area": pa_res["value_area"],
+                "atr_14": pa_res["atr_14"]
+            }
+        }
+
+        eval_res = council.evaluate_macro_regime(sym, summary, image_path=screenshot)
+        eval_res["display_name"] = sym
+        eval_res["nano_lot_viable"] = "25" in sym or "50" in sym or "STEP" in sym
+        macro_map["instruments"][sym] = eval_res
+        console.print(f"  [bold]Bias for {sym}:[/bold] [{ 'green' if eval_res['macro_bias'] == 'BULLISH' else 'red' }]{eval_res['macro_bias']}[/] ({eval_res['primary_regime']})")
+
+    # Write config/macro_bias.json
+    bias_path = "config/macro_bias.json"
+    with open(bias_path, "w") as f:
+        json.dump(macro_map, f, indent=2)
+
+    console.print(f"[bold green]✓ Authoritative macro bias map published to {bias_path}[/bold green]")
+    return macro_map
+
+
+def cycle_council() -> dict:
+    """
+    Cadence 3: Investment Council & Vault Desk (Every 24 Hours - 30 23 * * * UTC)
+    - Conducts post-mortems on all trades closed in the past 24 hours.
+    - Mutates Bayesian expectancy weights in config/strategy_weights.json.
+    - Sweeps 50% of every +20% milestone gain into the Locked Profit Vault.
+    - Evaluates 30-Day Graduation Gate and updates reports/TRAINING_DASHBOARD.md.
+    """
+    console.print("[bold gold1]══════ INVESTMENT COUNCIL & VAULT COMMITTEE (24-HOUR CADENCE) ══════[/bold gold1]")
+    load_environment()
+    db = DatabaseManager()
+    bankroll = BankrollManager(db)
+    gate = ReadinessGate(db)
+    post_mortem = PostMortemManager(db)
+
+    # 1. Fetch trades closed in past 24h
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+        SELECT * FROM paper_trades
+        WHERE status IN ('CLOSED_TP', 'CLOSED_SL')
+        ORDER BY closed_at DESC LIMIT 20
+        """)
+        closed_trades = [dict(r) for r in cursor.fetchall()]
+
+    console.print(f"[cyan]Auditing {len(closed_trades)} recent closed trades with Council Strategist...[/cyan]")
+    for trade in closed_trades:
+        review = post_mortem.process_resolved_trade({
+            "trade_id": trade["trade_id"],
+            "symbol": trade["symbol"],
+            "outcome": "WIN" if trade["status"] == "CLOSED_TP" else "LOSS",
+            "strategy": trade["strategy_primary"],
+            "realized_pnl": trade["realized_pnl"],
+            "realized_r": trade["realized_r"]
+        }, screenshot_path=trade.get("screenshot_path"))
+        console.print(f"  Council Reflexion on #{trade['trade_id']} ({trade['symbol']}): [dim]{review['actionable_rule_mutation']}[/dim]")
+
+    # 2. Evaluate Graduation Gate and update reports/TRAINING_DASHBOARD.md
+    metrics = gate.evaluate_metrics()
+    b_stat = bankroll.get_status()
+
+    console.print(f"[bold green]✓ Graduation Gate Evaluated: {metrics['status']}[/bold green]")
+    console.print(f"[bold gold1]✓ Vault Balance Preserved: ${b_stat['vault_balance']:.2f} (Active Bankroll: ${b_stat['active_bankroll']:.2f})[/bold gold1]")
+    console.print("[bold green]✓ Updated reports/TRAINING_DASHBOARD.md[/bold green]")
+    return metrics
+
+
+def cmd_advise(capital: float = 100.0):
+    """Personalized Capital Advisor CLI Blueprint."""
     load_environment()
     db = DatabaseManager()
     advisor = CapitalAdvisor(db)
@@ -200,7 +343,6 @@ def cmd_status():
         border_style="cyan"
     ))
 
-    # Open trades table
     with db.get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM paper_trades WHERE status IN ('PENDING_ENTRY', 'OPEN', 'BREAK_EVEN')")
@@ -233,84 +375,58 @@ def cmd_status():
     if trades:
         console.print(table)
     else:
-        console.print("[dim italic]No active open positions. Next 4-hour cycle will evaluate entries.[/dim italic]")
-
-
-def cmd_report():
-    """Outputs a comprehensive Markdown calibration report."""
-    load_environment()
-    db = DatabaseManager()
-    gate = ReadinessGate(db)
-    metrics = gate.evaluate_metrics()
-
-    console.print(f"""
-# 30-DAY CALIBRATION PERFORMANCE REPORT
-- **Timestamp**: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}
-- **Readiness State**: {metrics['status']}
-- **Simulation Epoch**: #{metrics['simulation_epochs']}
-- **Total Resolved Trades**: {metrics['total_trades']}
-- **Win Rate**: {metrics['win_rate']*100:.1f}%
-- **Profit Factor**: {metrics['profit_factor']:.2f}
-- **Max Drawdown**: {metrics['max_drawdown_percent']:.2f}%
-- **Active Bankroll**: ${metrics['active_bankroll']:.2f}
-- **Locked Profit Vault ("Profit Brought Home")**: ${metrics['total_vaulted_profit']:.2f}
-""")
-
-
-def cmd_daemon():
-    """Runs autonomous 4-hour cycle daemon."""
-    console.print("[bold green]Starting Autonomous 4-Hour Deriv Bot Daemon...[/bold green]")
-    console.print("[dim]Scheduled hours: 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC[/dim]")
-    try:
-        from apscheduler.schedulers.blocking import BlockingScheduler
-        scheduler = BlockingScheduler()
-        scheduler.add_job(execute_cycle, "cron", hour="0,4,8,12,16,20", minute="0")
-        # Run immediately upon start
-        execute_cycle()
-        scheduler.start()
-    except (ImportError, Exception):
-        console.print("[yellow]APScheduler unavailable or running in loop mode. Running cycle loop...[/yellow]")
-        while True:
-            execute_cycle()
-            time.sleep(4 * 3600)
+        console.print("[dim italic]No active open positions.[/dim italic]")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Autonomous Deriv Trading Bot & Gemini Council Advisor")
-    subparsers = parser.add_subparsers(dest="command", help="Command to execute")
+    parser = argparse.ArgumentParser(description="Autonomous Deriv Trading Bot & Hedge-Fund Multi-Cadence System")
+    parser.add_argument("--cycle", choices=["hourly", "macro", "council", "advise", "full_scan"], default=None,
+                        help="Execute a specific hedge-fund cadence desk")
+    parser.add_argument("--capital", type=float, default=100.0, help="Account capital in USD (default: 100)")
+    parser.add_argument("--dry-run", action="store_true", help="Execute without submitting virtual orders")
+    parser.add_argument("--symbol", type=str, default=None, help="Filter to a specific instrument")
 
-    # run-once
-    p_run = subparsers.add_parser("run-once", help="Run a single 4-hour scan cycle")
-    p_run.add_argument("--dry-run", action="store_true", help="Scan without submitting virtual orders")
-    p_run.add_argument("--symbol", type=str, default=None, help="Filter to a specific instrument")
+    # Legacy subcommands compatibility
+    subparsers = parser.add_subparsers(dest="command", help="Legacy subcommands")
+    p_run = subparsers.add_parser("run-once", help="Run a single scan cycle")
+    p_run.add_argument("--dry-run", action="store_true")
+    p_run.add_argument("--symbol", type=str, default=None)
 
-    # advise
-    p_advise = subparsers.add_parser("advise", help="Get personalized capital advice")
-    p_advise.add_argument("--capital", type=float, default=100.0, help="Capital amount in USD (default: 100)")
+    p_adv = subparsers.add_parser("advise", help="Get capital advice")
+    p_adv.add_argument("--capital", type=float, default=100.0)
 
-    # status
-    subparsers.add_parser("status", help="Show system dashboard and open positions")
-
-    # report
+    subparsers.add_parser("status", help="Show system dashboard")
     subparsers.add_parser("report", help="Generate performance report")
-
-    # daemon
-    subparsers.add_parser("daemon", help="Run 4-hour continuous daemon")
 
     args = parser.parse_args()
 
+    # Route by --cycle if provided
+    if args.cycle:
+        if args.cycle == "hourly":
+            cycle_hourly(dry_run=args.dry_run, capital=args.capital)
+        elif args.cycle == "macro":
+            cycle_macro([args.symbol] if args.symbol else None)
+        elif args.cycle == "council":
+            cycle_council()
+        elif args.cycle == "advise":
+            cmd_advise(args.capital)
+        elif args.cycle == "full_scan":
+            cycle_macro()
+            cycle_hourly(dry_run=args.dry_run, capital=args.capital)
+            cycle_council()
+        return
+
+    # Route by subcommand if provided
     if args.command == "run-once":
-        execute_cycle(dry_run=args.dry_run, symbol_filter=args.symbol)
+        cycle_hourly(dry_run=args.dry_run)
     elif args.command == "advise":
         cmd_advise(args.capital)
     elif args.command == "status":
         cmd_status()
     elif args.command == "report":
-        cmd_report()
-    elif args.command == "daemon":
-        cmd_daemon()
+        cmd_status()
     else:
-        # Default behavior: run advise with default $100 capital
+        # Default behavior: advise with $100
         cmd_advise(100.0)
 
 

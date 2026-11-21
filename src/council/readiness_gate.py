@@ -113,7 +113,7 @@ class ReadinessGate:
         is_live_ready = len(blockers) == 0
         status = "LIVE_READY" if is_live_ready else f"TRAINING_CALIBRATION (Day {days_elapsed}/30)"
 
-        return {
+        res = {
             "day_number": days_elapsed,
             "days_remaining": max(0, self.MIN_CALIBRATION_DAYS - days_elapsed),
             "total_trades": total_trades,
@@ -127,3 +127,49 @@ class ReadinessGate:
             "is_live_ready": is_live_ready,
             "graduation_blockers": blockers
         }
+        self.update_dashboard_markdown(res)
+        return res
+
+    def update_dashboard_markdown(self, m: Dict[str, Any], path: str = "reports/TRAINING_DASHBOARD.md"):
+        import os
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+        blockers_str = "\n".join(f"- ⏳ {b}" for b in m["graduation_blockers"]) if m["graduation_blockers"] else "✅ All criteria fulfilled for live deployment!"
+
+        content = rf"""# 📈 30-DAY CALIBRATION SCOREBOARD & VAULT TRACKER
+*Auto-updated daily by the Investment Council Committee (`daily_council_committee.yml`)*  
+*Last Refresh: **{now}***
+
+---
+
+## 🎯 1. GRADUATION GATE STATUS: `{m['status']}`
+| Metric | Current Value | Required Live Gate | Status |
+| :--- | :--- | :--- | :--- |
+| **Calibration Window** | Day **{m['day_number']}** / 30 | 30 full calendar days | {'✅ PASSED' if m['day_number'] >= 30 else '⏳ IN PROGRESS'} |
+| **Resolved Sample** | **{m['total_trades']}** trades | $\\ge 30$ resolved trades | {'✅ PASSED' if m['total_trades'] >= 30 else '⏳ IN PROGRESS'} |
+| **Profit Factor** | **{m['profit_factor']:.2f}** | $\\ge 1.50$ | {'✅ PASSED' if m['profit_factor'] >= 1.50 else '❌ BELOW THRESHOLD'} |
+| **Max Drawdown** | **{m['max_drawdown_percent']:.1f}%** | $\\le 10.0\%$ | {'✅ PASSED' if m['max_drawdown_percent'] <= 10.0 else '❌ EXCEEDS CAP'} |
+| **Rolling Win Rate** | **{m['win_rate']*100:.1f}%** | Baseline $> 50.0\%$ | {'✅ HEALTHY' if m['win_rate'] >= 0.50 else '⚠️ MONITORING'} |
+
+### Remaining Graduation Gate Blockers:
+{blockers_str}
+
+---
+
+## 🏦 2. CAPITAL & PROFIT-LOCK VAULT SCOREBOARD
+- **Active Trading Bankroll**: **`${m['active_bankroll']:.2f}`**
+- **Locked Profit Vault ("Profit Brought Home")**: **`${m['total_vaulted_profit']:.2f}`**
+- **Total Combined Capital**: **`${m['active_bankroll'] + m['total_vaulted_profit']:.2f}`**
+- **Current Simulation Epoch**: `#{m['simulation_epochs']}` (Auto-reset sandbox on equity $< $15.00)
+
+---
+
+## 🛡️ 3. INSTITUTIONAL RISK CONTROLS ACTIVE
+- **Maximum Risk per Trade**: 1.5% (hard cap 2.0%)
+- **Cover Risk to Zero**: Move SL to Break-Even at $+1.0R$ (Fabio Valentini)
+- **Session Walk-Away**: Stop new entries upon $+3.0R$ realized gain (Freddy Sarento)
+- **Small-Account Protection**: Automatically filters out $0.01$ lot V75 on $\$100$ balances to preserve capital
+"""
+        with open(path, "w") as f:
+            f.write(content)

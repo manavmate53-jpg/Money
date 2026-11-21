@@ -5,6 +5,7 @@ and Council edge notes.
 """
 
 from typing import Dict, Any, List, Optional
+from datetime import datetime, timezone
 import os
 
 from src.database.db_manager import DatabaseManager
@@ -135,7 +136,7 @@ class CapitalAdvisor:
         best_tip: TradingTip = top_candidate["tip"]
         best_viab: Dict[str, Any] = top_candidate["viability"]
 
-        return {
+        result = {
             "capital_analyzed": capital,
             "readiness": readiness,
             "recommended_instrument": top_candidate["symbol"],
@@ -161,3 +162,74 @@ class CapitalAdvisor:
             "disqualified_instruments": disqualified[:3],
             "total_candidates_analyzed": len(self.SYNTHETIC_INSTRUMENTS)
         }
+
+        report_md = self.generate_markdown_ticket(result)
+        os.makedirs("reports", exist_ok=True)
+        with open("reports/LATEST_ADVICE.md", "w") as f:
+            f.write(report_md)
+
+        return result
+
+    def generate_markdown_ticket(self, data: Dict[str, Any]) -> str:
+        """Generates clean GitHub-ready Markdown for reports/LATEST_ADVICE.md."""
+        r = data["readiness"]
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+        reasons_md = "\n".join(f"- {reason}" for reason in data["confluence_reasons"])
+        disqualified_md = ""
+        if data.get("disqualified_instruments"):
+            disqualified_md = "\n### Why Other Indices Were Disqualified on $100 Capital\n"
+            for dis in data["disqualified_instruments"]:
+                disqualified_md += f"- **{dis['symbol']}**: {dis['reason']}\n"
+
+        return rf"""# 🏛 CAPITAL ADVISOR — ${data['capital_analyzed']:.0f} LIVE EXECUTION BLUEPRINT
+*Auto-updated every hour by the Execution & Risk Desk (`hourly_execution_desk.yml`)*  
+*Last Refresh: **{now}***
+
+---
+
+## 📊 1. 30-DAY CALIBRATION & VAULT SCOREBOARD
+- **Readiness State**: `{r['status']}`
+- **Simulation Epoch**: `#{r['simulation_epochs']}`
+- **Rolling Win Rate**: **{r['win_rate']*100:.1f}%**
+- **Profit Factor**: **{r['profit_factor']:.2f}** (Target: $\\ge 1.50$)
+- **Max Drawdown**: **{r['max_drawdown_percent']:.1f}%** (Target: $\\le 10.0\%$)
+- **Active Bankroll**: **${r['active_bankroll']:.2f}**
+- **Locked Profit Vault ("Profit Brought Home")**: **${r['total_vaulted_profit']:.2f}**
+
+---
+
+## 🎯 2. #1 RECOMMENDED INSTRUMENT
+- **Instrument**: **`{data['recommended_instrument']}`** *(Ranked #1 for ${data['capital_analyzed']:.0f} capital)*
+- **Directional Bias**: **{data['direction']}**
+- **Market Regime**: `{data['market_regime']}`
+- **Primary Strategy**: `{data['primary_strategy']}`
+- **Champion Rule Alignment**: *{data['champions_rule'] or 'Auction Value Area Absorption'}*
+
+---
+
+## 🎫 3. EXACT EXECUTION TICKET
+| Parameter | Exact Value | Notes |
+| :--- | :--- | :--- |
+| **Recommended Lot Size** | **`{data['recommended_lot_size']} lots`** | Granular nano-lot execution |
+| **Dollar Risk ($)** | **`${data['dollar_risk']:.2f}`** | **{data['risk_percent']}%** of ${data['capital_analyzed']:.0f} equity |
+| **Required Margin** | `${data['margin_required']:.2f}` | Leverage 1:1000 |
+| **Entry Zone** | **`{data['entry_zone']}`** | Structural entry band |
+| **Stop Loss (SL)** | **`{data['stop_loss']}`** | {data['sl_points']} points distance |
+| **Take Profit 1 (TP1)** | **`{data['take_profit_1']}`** | Planned R:R: **{data['risk_reward_ratio']}** |
+| **Take Profit 2 (TP2)** | **`{data['take_profit_2']}`** | Major liquidity pool |
+| **Cover-Risk-to-Zero** | **`{data['break_even_trigger']}`** | Ratchet SL to Break-Even at $+1.0R$ |
+| **Estimated Hold Time** | **{data['hold_time_estimate']}** | Based on $\\text{{ATR}}_{{14}}$ velocity |
+
+---
+
+## 🔍 4. CONFLUENCE SIGNALS
+{reasons_md}
+
+---
+
+## ⚠️ 5. GEMINI COUNCIL WARNING / EDGE NOTE
+> *{data['council_edge_note']}*
+
+{disqualified_md}
+"""

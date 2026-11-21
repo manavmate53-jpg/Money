@@ -1,0 +1,76 @@
+name: "4. On-Demand Capital Advisor (Manual)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      capital:
+        description: "Account Capital in USD"
+        required: true
+        default: "100"
+      mode:
+        description: "Execution Mode"
+        required: true
+        default: "advise"
+        type: choice
+        options:
+          - advise
+          - hourly
+          - macro
+          - council
+          - full_scan
+
+concurrency:
+  group: deriv-bot-state-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  manual_run:
+    name: "Manual Capital Advisor Execution"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: "Set up Python 3.12"
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: "Install Python Dependencies"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: "Install Playwright Chromium"
+        if: ${{ inputs.mode != 'council' }}
+        run: |
+          playwright install --with-deps chromium
+
+      - name: "Execute Selected Mode"
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DERIV_APP_ID: "1089"
+        run: |
+          python main.py --cycle ${{ inputs.mode }} --capital ${{ inputs.capital }}
+
+      - name: "Commit & Push Updated Blueprint"
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/ config/ reports/
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore(bot): manual ${{ inputs.mode }} run for \$${{ inputs.capital }} [skip ci]"
+            for i in 1 2 3; do
+              git pull --rebase origin main && git push origin main && break || sleep 5;
+            done
+          fi

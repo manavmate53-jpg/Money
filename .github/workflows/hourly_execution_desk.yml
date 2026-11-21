@@ -1,0 +1,64 @@
+name: "1. Execution & Risk Desk (Hourly)"
+
+on:
+  schedule:
+    # Runs every 1 hour at minute 0 UTC
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: deriv-bot-state-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  execution_desk:
+    name: "Tactical Execution & Risk Management"
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: "Set up Python 3.12"
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: "Install Python Dependencies"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: "Install Playwright Chromium"
+        run: |
+          playwright install --with-deps chromium
+
+      - name: "Execute Hourly Risk & Sniper Cycle"
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DERIV_APP_ID: "1089"
+        run: |
+          python main.py --cycle hourly --capital 100
+
+      - name: "Commit & Push Updated Bot State"
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/ config/ reports/
+          # Check if there are changes to commit
+          if git diff --staged --quiet; then
+            echo "No state changes to commit."
+          else
+            git commit -m "chore(bot): hourly execution cycle [skip ci]"
+            # Pull-rebase with retry in case another job pushed
+            for i in 1 2 3; do
+              git pull --rebase origin main && git push origin main && break || sleep 5;
+            done
+          fi

@@ -1,13 +1,35 @@
 # MONEY: AUTONOMOUS DERIV SYNTHETIC INDICES TRADING BOT & GEMINI COUNCIL ADVISOR
 
+[![Hourly Execution Desk](https://github.com/manavmate53-jpg/Money/actions/workflows/hourly_execution_desk.yml/badge.svg)](https://github.com/manavmate53-jpg/Money/actions/workflows/hourly_execution_desk.yml)
+[![Macro Regime Desk](https://github.com/manavmate53-jpg/Money/actions/workflows/macro_regime_desk.yml/badge.svg)](https://github.com/manavmate53-jpg/Money/actions/workflows/macro_regime_desk.yml)
+[![Investment Council](https://github.com/manavmate53-jpg/Money/actions/workflows/daily_council_committee.yml/badge.svg)](https://github.com/manavmate53-jpg/Money/actions/workflows/daily_council_committee.yml)
 [![Deriv Synthetic Trading](https://img.shields.io/badge/Deriv-Synthetic_Indices-00a8ff.svg)](https://deriv.com)
 [![Gemini Council](https://img.shields.io/badge/Gemini_2.5-Multimodal_Council-4285F4.svg)](https://deepmind.google/technologies/gemini/)
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://python.org)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-An autonomous, self-improving quantitative trading system and capital advisor designed for **Deriv Synthetic Indices** (`Volatility 10–100`, `1s` variants, `Boom/Crash`, `Step Index`). 
+An institutional-grade, self-training quantitative trading bot and capital advisor designed for **Deriv Synthetic Indices** (`Volatility 10–100`, `1s` variants, `Boom/Crash`, `Step Index`). 
 
-Driven by a **Multi-Framework Confluence Engine** (ICT/SMC, Supply & Demand, Auction Market Theory), **Playwright SmartCharts Canvas Automation**, **Live WebSocket Interception**, and a **Gemini 2.5-backed 3-Persona Council** that conducts episodic post-mortems and mutates strategy weights over a 30-day forward-testing calibration gate.
+Runs 24/7 autonomously inside **GitHub Actions** across distinct hedge-fund operational cadences, persisting state across runs via automated Git commits and providing human-ready trade tickets in [`reports/LATEST_ADVICE.md`](reports/LATEST_ADVICE.md).
+
+---
+
+## 🏛 HEDGE-FUND DESK CADENCES (GITHUB ACTIONS)
+
+| Hedge-Fund Desk | GitHub Actions Cadence | Core Responsibility | Gemini Model & Action | State Output |
+| :--- | :--- | :--- | :--- | :--- |
+| **1. Execution & Risk Desk** | **Every 1 Hour** (`0 * * * *` UTC) | Intrabar TP/SL tracking, Break-Even ratchet at `+1.0R`, M15 sniper entries aligned with H4 macro bias | `gemini-2.5-flash` | [`reports/LATEST_ADVICE.md`](reports/LATEST_ADVICE.md), `data/trading_state.db` |
+| **2. Macro & Regime Desk** | **Every 4 Hours** (`0 */4 * * *` UTC) | Captures H4/H1/M15 chart PNGs via Playwright, scores SMC, Supply/Demand, One-Time Framing & Value Area | `gemini-2.5-pro` (Vision) | [`config/macro_bias.json`](config/macro_bias.json) |
+| **3. Investment Council & Vault** | **Every 24 Hours** (`30 23 * * *` UTC) | Deep post-mortem on closed trades, updates Bayesian weights, sweeps 50% profit into Vault, auto-resets epochs | `gemini-2.5-pro` (Reflexion) | [`config/strategy_weights.json`](config/strategy_weights.json), [`reports/TRAINING_DASHBOARD.md`](reports/TRAINING_DASHBOARD.md) |
+| **4. On-Demand Advisor** | **Manual Trigger** (`workflow_dispatch`) | Run on-demand scan or custom capital allocation (e.g. `$100`, `$500`) from the GitHub Actions tab | `gemini-2.5-pro` | [`reports/LATEST_ADVICE.md`](reports/LATEST_ADVICE.md) |
+
+---
+
+## ⚙️ TWO-STEP GITHUB SETUP
+
+1. **Enable Workflow Write Permissions**:
+   - In [github.com/manavmate53-jpg/Money](https://github.com/manavmate53-jpg/Money), navigate to **Settings → Actions → General → Workflow permissions**.
+   - Select **Read and write permissions** and click **Save**. *(Enables the bot to persist `data/trading_state.db`, `config/macro_bias.json`, and `reports/` across CI/CD runs).*
+2. **Repository Secret**:
+   - Under **Settings → Secrets and variables → Actions**, confirm your repository secret is named **`GEMINI_API_KEY`**. *(Used automatically by all 4 workflows).*
 
 ---
 

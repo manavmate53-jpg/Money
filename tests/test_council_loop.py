@@ -103,3 +103,25 @@ def test_readiness_gate_criteria(council_env):
     assert updated_metrics["total_trades"] == 40
     assert updated_metrics["profit_factor"] >= 1.5
     assert updated_metrics["win_rate"] > 0.80
+
+
+def test_gemini_council_macro_and_tactical_schemas(council_env):
+    db, pm, gate, _ = council_env
+    council = GeminiCouncil()
+
+    # Test tactical sniper schema
+    tactical = council.validate_tactical_sniper("1HZ25V", "BULLISH", {"direction": "BULLISH", "confidence": 0.85})
+    assert "approved" in tactical
+    assert "adjusted_lot_multiplier" in tactical
+    assert tactical["adjusted_lot_multiplier"] > 0
+
+    # Test macro regime schema
+    macro = council.evaluate_macro_regime("1HZ25V", {
+        "current_price": 2800.0,
+        "smc_ict": {"structure": {"trend": "BULLISH"}},
+        "price_action": {"regime": "DIRECTIONAL_TREND", "atr_14": 25.0}
+    })
+    assert macro["symbol"] == "1HZ25V"
+    assert macro["macro_bias"] in ["BULLISH", "BEARISH", "NEUTRAL"]
+    assert "key_invalidation_level" in macro
+

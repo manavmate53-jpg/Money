@@ -11,8 +11,12 @@ from typing import Dict, List, Optional, Any
 
 
 class DatabaseManager:
-    def __init__(self, db_path: str = "data/trading_bot.db"):
+    def __init__(self, db_path: str = "data/trading_state.db"):
         self.db_path = db_path
+        # Migrate legacy path if exists
+        if db_path == "data/trading_state.db" and not os.path.exists(db_path) and os.path.exists("data/trading_bot.db"):
+            import shutil
+            shutil.copyfile("data/trading_bot.db", db_path)
         os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
         self.init_tables()
 
