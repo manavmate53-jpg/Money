@@ -1,0 +1,59 @@
+{
+  "source": "Quantitative Finance, Prop Survivability (https://youtu.be/vGSpbspmGoM) & Stochastic Risk Modeling",
+  "version": "2.0.0",
+  "prop_firm_survivability_laws": {
+    "effective_drawdown_budget": {
+      "definition": "The nominal account balance ($100) is cosmetic; the true capital you have to trade is the maximum allowable drawdown budget ($15 - $20).",
+      "formula": "Survival_Units = floor(Max_Drawdown_Dollar / Risk_Per_Trade_Dollar)",
+      "benchmark": "On a $100 account with $20 max DD budget and $1.50 risk, the trader has exactly 13 units of life."
+    },
+    "breakeven_win_rate": {
+      "definition": "Minimum win rate needed to achieve net zero EV at a given reward-to-risk ratio.",
+      "formula": "W_be = 1 / (1 + RR)",
+      "examples": {
+        "1_to_2_5_RR": "28.57%",
+        "1_to_3_0_RR": "25.00%",
+        "1_to_1_0_RR": "50.00%"
+      }
+    },
+    "losing_streak_ruin_guarantee": {
+      "definition": "Probability of experiencing an unbroken cluster of k consecutive losses.",
+      "formula": "P(k losses) = (1 - W)^k",
+      "safety_rule": "Position sizing MUST guarantee surviving at least 8 consecutive losses (k=8) without breaching the drawdown floor."
+    },
+    "absorbing_barrier_first_passage": {
+      "definition": "Probability of hitting the profit milestone target (+20%) before hitting the drawdown floor (-15%).",
+      "formula": "P_success = (1 - (q / (p * b))^s) / (1 - (q / (p * b))^(s + t))",
+      "implication": "Never size up during early epoch stages before empirical edge has established positive drift."
+    },
+    "position_sizing_sweet_spot": {
+      "range": "0.5% to 1.5% of active equity",
+      "penalties": {
+        "under_sizing_stagnation": "< 0.4% risk requires too many trade steps, suffering regime decay before hitting profit milestones.",
+        "over_sizing_ruin": "> 2.0% risk renders an account unable to survive a normal 5-to-7 loss sequence."
+      }
+    },
+    "net_real_return_accounting": {
+      "formula": "Net_Real_Return = Sum(Vaulted_Payouts) - Sum(Simulation_Epoch_Resets * Starting_Capital)",
+      "philosophy": "True compounding is measured by capital successfully extracted into the vault minus capital burned across resets."
+    }
+  },
+  "stochastic_portfolio_laws": {
+    "fractional_kelly": {
+      "formula": "Quarter_Kelly = 0.25 * ((W * b - (1 - W)) / b)",
+      "hard_ceiling": "2.0% max risk per trade"
+    },
+    "hurst_exponent_regimes": {
+      "trending": "H > 0.55 -> Execute momentum trend continuation and one-time framing.",
+      "mean_reverting": "H < 0.45 -> Execute Value Area boundary fading and liquidity sweeps.",
+      "random_walk_chop": "0.45 <= H <= 0.55 -> Pure Brownian random walk; automatically skip entries."
+    },
+    "risk_adjusted_ratios": {
+      "sharpe_target": ">= 1.5",
+      "sortino_target": ">= 2.0",
+      "calmar_target": ">= 2.5",
+      "profit_factor_target": ">= 1.50",
+      "max_drawdown_limit": "<= 10.0%"
+    }
+  }
+}

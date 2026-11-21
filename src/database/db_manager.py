@@ -1,6 +1,14 @@
 """
-SQLite Database Manager for Deriv Synthetic Trading Bot & Gemini Council.
-Handles candles, paper trades, simulation epochs, profit vault, council notes, and readiness gate.
+Institutional Database Manager with Strictly Separated Win/Loss Tables.
+Creates:
+1. active_trades: currently open or pending positions.
+2. profitable_trades: dedicated table for closed trades with net_pnl > 0.
+3. losing_trades: dedicated table for closed trades with net_pnl <= 0.
+4. simulation_epochs, vault_ledger, council_journal, system_kv.
+Exports:
+- reports/PROFIT_LEDGER.md
+- reports/LOSS_LEDGER.md
+- reports/TRADE_VISUAL_JOURNAL.md
 """
 
 import sqlite3
@@ -13,10 +21,6 @@ from typing import Dict, List, Optional, Any
 class DatabaseManager:
     def __init__(self, db_path: str = "data/trading_state.db"):
         self.db_path = db_path
-        # Migrate legacy path if exists
-        if db_path == "data/trading_state.db" and not os.path.exists(db_path) and os.path.exists("data/trading_bot.db"):
-            import shutil
-            shutil.copyfile("data/trading_bot.db", db_path)
         os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
         self.init_tables()
 
@@ -29,42 +33,113 @@ class DatabaseManager:
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
-            # Candles cache
+            # Active/pending trades
             cursor.execute("""
-            CREATE TABLE IF NOT EXISTS candles (
+            CREATE TABLE IF NOT EXISTS active_trades (
+                trade_id TEXT PRIMARY KEY,
+                epoch_id INTEGER NOT NULL,
                 symbol TEXT NOT NULL,
-                timeframe TEXT NOT NULL,
-                epoch INTEGER NOT NULL,
-                open REAL NOT NULL,
-                high REAL NOT NULL,
-                low REAL NOT NULL,
-                close REAL NOT NULL,
-                volume REAL NOT NULL,
-                PRIMARY KEY (symbol, timeframe, epoch)
+                direction TEXT NOT NULL,
+                timeframes_used TEXT NOT NULL,
+                strategy_framework TEXT NOT NULL,
+                entry_min REAL NOT NULL,
+                entry_max REAL NOT NULL,
+                entry_executed REAL,
+                tp_price REAL NOT NULL,
+                sl_price REAL NOT NULL,
+                original_sl REAL NOT NULL,
+                lot_size REAL NOT NULL,
+                dollar_risk REAL NOT NULL,
+                margin_required REAL NOT NULL,
+                total_fund REAL NOT NULL,
+                used_fund REAL NOT NULL,
+                status TEXT NOT NULL, -- PENDING_ENTRY, OPEN, BREAK_EVEN
+                before_screenshots_json TEXT NOT NULL,
+                trade_reason_summary TEXT,
+                w1_who TEXT, w2_what TEXT, w3_when TEXT, w4_where TEXT, w5_why TEXT,
+                opened_at TEXT NOT NULL
             );
             """)
 
-            # Simulation Epochs (Auto-Reset tracking)
+            # Dedicated Table 1: PROFITABLE TRADES (net_pnl > 0)
             cursor.execute("""
-            CREATE TABLE IF NOT EXISTS simulation_epochs (
-                epoch_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                epoch_number INTEGER NOT NULL,
-                start_time TEXT NOT NULL,
-                end_time TEXT,
-                starting_balance REAL NOT NULL,
-                final_balance REAL,
-                status TEXT NOT NULL, -- ACTIVE, BANKRUPT, COMPLETED
-                reason TEXT
+            CREATE TABLE IF NOT EXISTS profitable_trades (
+                trade_id TEXT PRIMARY KEY,
+                epoch_id INTEGER NOT NULL,
+                symbol TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                timeframes_used TEXT NOT NULL,
+                strategy_framework TEXT NOT NULL,
+                entry_price REAL NOT NULL,
+                exit_price REAL NOT NULL,
+                tp_price REAL NOT NULL,
+                sl_price REAL NOT NULL,
+                lot_size REAL NOT NULL,
+                rr_planned REAL NOT NULL,
+                rr_realized REAL NOT NULL,
+                total_fund REAL NOT NULL,
+                used_fund REAL NOT NULL,
+                net_pnl REAL NOT NULL,
+                after_trade_fund REAL NOT NULL,
+                vault_locked_after REAL NOT NULL,
+                trade_reason_summary TEXT NOT NULL,
+                w1_who TEXT NOT NULL,
+                w2_what TEXT NOT NULL,
+                w3_when TEXT NOT NULL,
+                w4_where TEXT NOT NULL,
+                w5_why TEXT NOT NULL,
+                what_improved TEXT NOT NULL,
+                before_screenshots_json TEXT NOT NULL,
+                after_screenshots_json TEXT NOT NULL,
+                opened_at TEXT NOT NULL,
+                closed_at TEXT NOT NULL,
+                hold_duration_hours REAL NOT NULL
             );
             """)
 
-            # Paper Trades table
+            # Dedicated Table 2: LOSING TRADES (net_pnl <= 0)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS losing_trades (
+                trade_id TEXT PRIMARY KEY,
+                epoch_id INTEGER NOT NULL,
+                symbol TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                timeframes_used TEXT NOT NULL,
+                strategy_framework TEXT NOT NULL,
+                entry_price REAL NOT NULL,
+                exit_price REAL NOT NULL,
+                tp_price REAL NOT NULL,
+                sl_price REAL NOT NULL,
+                lot_size REAL NOT NULL,
+                rr_planned REAL NOT NULL,
+                rr_realized REAL NOT NULL,
+                total_fund REAL NOT NULL,
+                used_fund REAL NOT NULL,
+                net_pnl REAL NOT NULL,
+                after_trade_fund REAL NOT NULL,
+                vault_locked_after REAL NOT NULL,
+                trade_reason_summary TEXT NOT NULL,
+                w1_who TEXT NOT NULL,
+                w2_what TEXT NOT NULL,
+                w3_when TEXT NOT NULL,
+                w4_where TEXT NOT NULL,
+                w5_why TEXT NOT NULL,
+                what_improved TEXT NOT NULL,
+                before_screenshots_json TEXT NOT NULL,
+                after_screenshots_json TEXT NOT NULL,
+                opened_at TEXT NOT NULL,
+                closed_at TEXT NOT NULL,
+                hold_duration_hours REAL NOT NULL
+            );
+            """)
+
+            # Backward-compatible view or legacy table
             cursor.execute("""
             CREATE TABLE IF NOT EXISTS paper_trades (
                 trade_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 epoch_number INTEGER NOT NULL,
                 symbol TEXT NOT NULL,
-                direction TEXT NOT NULL, -- BUY, SELL
+                direction TEXT NOT NULL,
                 strategy_primary TEXT NOT NULL,
                 strategy_secondary TEXT,
                 entry_min REAL NOT NULL,
@@ -77,7 +152,7 @@ class DatabaseManager:
                 lot_size REAL NOT NULL,
                 dollar_risk REAL NOT NULL,
                 margin_required REAL NOT NULL,
-                status TEXT NOT NULL, -- PENDING_ENTRY, OPEN, BREAK_EVEN, CLOSED_TP, CLOSED_SL, TIMEOUT
+                status TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 entry_time TEXT,
                 closed_at TEXT,
@@ -90,7 +165,19 @@ class DatabaseManager:
             );
             """)
 
-            # Two-Bucket Profit Lock Vault ("Profit Comes Home With Us")
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS simulation_epochs (
+                epoch_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                epoch_number INTEGER NOT NULL,
+                start_time TEXT NOT NULL,
+                end_time TEXT,
+                starting_balance REAL NOT NULL,
+                final_balance REAL,
+                status TEXT NOT NULL,
+                reason TEXT
+            );
+            """)
+
             cursor.execute("""
             CREATE TABLE IF NOT EXISTS vault_ledger (
                 transfer_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,14 +191,13 @@ class DatabaseManager:
             );
             """)
 
-            # Gemini Council Notes & Reflexion Journal
             cursor.execute("""
             CREATE TABLE IF NOT EXISTS council_journal (
                 note_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp TEXT NOT NULL,
-                trade_id INTEGER,
+                trade_id TEXT,
                 symbol TEXT NOT NULL,
-                outcome TEXT NOT NULL, -- WIN, LOSS, BANKRUPTCY, SCREENING
+                outcome TEXT NOT NULL,
                 structural_diagnosis TEXT NOT NULL,
                 risk_criticism TEXT NOT NULL,
                 actionable_rule_mutation TEXT NOT NULL,
@@ -120,23 +206,6 @@ class DatabaseManager:
             );
             """)
 
-            # System State & Readiness Snapshots
-            cursor.execute("""
-            CREATE TABLE IF NOT EXISTS readiness_snapshots (
-                snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL,
-                day_number INTEGER NOT NULL,
-                total_trades INTEGER NOT NULL,
-                win_rate REAL NOT NULL,
-                profit_factor REAL NOT NULL,
-                max_drawdown_percent REAL NOT NULL,
-                total_vaulted_profit REAL NOT NULL,
-                active_bankroll REAL NOT NULL,
-                readiness_status TEXT NOT NULL -- TRAINING_CALIBRATION, LIVE_READY
-            );
-            """)
-
-            # Key-Value system store
             cursor.execute("""
             CREATE TABLE IF NOT EXISTS system_kv (
                 key TEXT PRIMARY KEY,
@@ -168,6 +237,99 @@ class DatabaseManager:
             except Exception:
                 return row["value"]
 
+    def record_active_trade(self, trade_dict: Dict[str, Any]):
+        """Inserts an open trade into active_trades."""
+        with self.get_connection() as conn:
+            conn.execute("""
+            INSERT OR REPLACE INTO active_trades (
+                trade_id, epoch_id, symbol, direction, timeframes_used, strategy_framework,
+                entry_min, entry_max, entry_executed, tp_price, sl_price, original_sl,
+                lot_size, dollar_risk, margin_required, total_fund, used_fund,
+                status, before_screenshots_json, trade_reason_summary,
+                w1_who, w2_what, w3_when, w4_where, w5_why, opened_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                trade_dict["trade_id"], trade_dict["epoch_id"], trade_dict["symbol"], trade_dict["direction"],
+                trade_dict.get("timeframes_used", "H4,H1,M15"), trade_dict.get("strategy_framework", "SMC_ICT"),
+                trade_dict["entry_min"], trade_dict["entry_max"], trade_dict.get("entry_executed"),
+                trade_dict["tp_price"], trade_dict["sl_price"], trade_dict["original_sl"],
+                trade_dict["lot_size"], trade_dict["dollar_risk"], trade_dict["margin_required"],
+                trade_dict["total_fund"], trade_dict["used_fund"], trade_dict.get("status", "PENDING_ENTRY"),
+                json.dumps(trade_dict.get("before_screenshots", {})),
+                trade_dict.get("trade_reason_summary", ""),
+                trade_dict.get("w1_who", ""), trade_dict.get("w2_what", ""),
+                trade_dict.get("w3_when", ""), trade_dict.get("w4_where", ""),
+                trade_dict.get("w5_why", ""), trade_dict.get("opened_at", datetime.now(timezone.utc).isoformat())
+            ))
+            conn.commit()
+
+    def record_closed_trade(self, closed_dict: Dict[str, Any]) -> str:
+        """
+        Routes closed trade to profitable_trades if net_pnl > 0 else losing_trades.
+        Removes the trade from active_trades.
+        """
+        net_pnl = float(closed_dict.get("net_pnl", 0.0))
+        target_table = "profitable_trades" if net_pnl > 0 else "losing_trades"
+        t_id = str(closed_dict["trade_id"])
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            # Delete from active_trades
+            cursor.execute("DELETE FROM active_trades WHERE trade_id = ?", (t_id,))
+
+            cursor.execute(f"""
+            INSERT OR REPLACE INTO {target_table} (
+                trade_id, epoch_id, symbol, direction, timeframes_used, strategy_framework,
+                entry_price, exit_price, tp_price, sl_price, lot_size, rr_planned, rr_realized,
+                total_fund, used_fund, net_pnl, after_trade_fund, vault_locked_after,
+                trade_reason_summary, w1_who, w2_what, w3_when, w4_where, w5_why,
+                what_improved, before_screenshots_json, after_screenshots_json,
+                opened_at, closed_at, hold_duration_hours
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                t_id, closed_dict.get("epoch_id", 1), closed_dict["symbol"], closed_dict["direction"],
+                closed_dict.get("timeframes_used", "H4,H1,M15"), closed_dict.get("strategy_framework", "SMC_ICT"),
+                closed_dict["entry_price"], closed_dict["exit_price"], closed_dict["tp_price"], closed_dict["sl_price"],
+                closed_dict["lot_size"], closed_dict.get("rr_planned", 2.5), closed_dict.get("rr_realized", 0.0),
+                closed_dict.get("total_fund", 100.0), closed_dict.get("used_fund", 1.50),
+                net_pnl, closed_dict.get("after_trade_fund", 100.0 + net_pnl), closed_dict.get("vault_locked_after", 0.0),
+                closed_dict.get("trade_reason_summary", ""),
+                closed_dict.get("w1_who", "Confluence Engine"),
+                closed_dict.get("w2_what", f"{closed_dict['symbol']} {closed_dict['direction']}"),
+                closed_dict.get("w3_when", datetime.now(timezone.utc).isoformat()),
+                closed_dict.get("w4_where", "H4/H1 structural zone"),
+                closed_dict.get("w5_why", "SMC/ICT liquidity alignment"),
+                closed_dict.get("what_improved", "Bayesian weight updated"),
+                json.dumps(closed_dict.get("before_screenshots", {})),
+                json.dumps(closed_dict.get("after_screenshots", {})),
+                closed_dict.get("opened_at", datetime.now(timezone.utc).isoformat()),
+                closed_dict.get("closed_at", datetime.now(timezone.utc).isoformat()),
+                closed_dict.get("hold_duration_hours", 2.0)
+            ))
+            conn.commit()
+
+        # Re-export Markdown Ledgers
+        self.export_all_ledgers()
+        return target_table
+
+    def get_profitable_trades(self) -> List[Dict[str, Any]]:
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM profitable_trades ORDER BY closed_at DESC")
+            return [dict(r) for r in cursor.fetchall()]
+
+    def get_losing_trades(self) -> List[Dict[str, Any]]:
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM losing_trades ORDER BY closed_at DESC")
+            return [dict(r) for r in cursor.fetchall()]
+
+    def get_active_trades(self) -> List[Dict[str, Any]]:
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM active_trades ORDER BY opened_at DESC")
+            return [dict(r) for r in cursor.fetchall()]
+
     def log_council_note(
         self,
         symbol: str,
@@ -175,7 +337,7 @@ class DatabaseManager:
         diagnosis: str,
         criticism: str,
         mutation: str,
-        trade_id: Optional[int] = None,
+        trade_id: Optional[str] = None,
         weight_changes: Optional[Dict] = None,
         raw_response: Optional[str] = None
     ) -> int:
@@ -190,8 +352,116 @@ class DatabaseManager:
                 actionable_rule_mutation, weight_changes_json, raw_gemini_response
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                now, trade_id, symbol, outcome,
+                now, str(trade_id or ""), symbol, outcome,
                 diagnosis, criticism, mutation, weight_json, raw_response or ""
             ))
             conn.commit()
             return cursor.lastrowid
+
+    def export_all_ledgers(self, reports_dir: str = "reports"):
+        """Exports reports/PROFIT_LEDGER.md, LOSS_LEDGER.md, and TRADE_VISUAL_JOURNAL.md."""
+        os.makedirs(reports_dir, exist_ok=True)
+        self.export_profit_ledger(os.path.join(reports_dir, "PROFIT_LEDGER.md"))
+        self.export_loss_ledger(os.path.join(reports_dir, "LOSS_LEDGER.md"))
+        self.export_visual_journal(os.path.join(reports_dir, "TRADE_VISUAL_JOURNAL.md"))
+
+    def export_profit_ledger(self, file_path: str):
+        wins = self.get_profitable_trades()
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        total_pnl = sum(w["net_pnl"] for w in wins)
+
+        lines = [
+            "# 🟢 PROFIT LEDGER (WINNING TRADES REPOSITORY)",
+            f"*Auto-generated from `profitable_trades` SQLite table | Refreshed: {now}*",
+            f"**Total Realized Profit**: `+${total_pnl:.2f}` across `{len(wins)}` winning setups\n",
+            "| Trade ID | Symbol | Dir | Lot | Entry ➔ Exit | Realized R | Net Profit | Pre-Fund | Post-Fund | Vault After | 5W Thesis |",
+            "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |"
+        ]
+
+        for w in wins:
+            lines.append(
+                f"| `{w['trade_id']}` | **{w['symbol']}** | {w['direction']} | {w['lot_size']} | "
+                f"{w['entry_price']:.2f} ➔ {w['exit_price']:.2f} | **+{w['rr_realized']:.2f}R** | "
+                f"**+${w['net_pnl']:.2f}** | ${w['total_fund']:.2f} | ${w['after_trade_fund']:.2f} | "
+                f"${w['vault_locked_after']:.2f} | *{w['trade_reason_summary']}* |"
+            )
+
+        if not wins:
+            lines.append("\n*No profitable trades recorded yet in this forward-testing calibration window.*")
+
+        with open(file_path, "w") as f:
+            f.write("\n".join(lines) + "\n")
+
+    def export_loss_ledger(self, file_path: str):
+        losses = self.get_losing_trades()
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        total_loss = abs(sum(l["net_pnl"] for l in losses))
+
+        lines = [
+            "# 🔴 LOSS LEDGER (POST-MORTEM & LOSS AUDIT REPOSITORY)",
+            f"*Auto-generated from `losing_trades` SQLite table | Refreshed: {now}*",
+            f"**Total Realized Loss**: `-${total_loss:.2f}` across `{len(losses)}` losing setups\n",
+            "| Trade ID | Symbol | Dir | Lot | Entry ➔ Exit | Realized R | Net Loss | Pre-Fund | Post-Fund | 5W Root Cause | What Improved? |",
+            "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |"
+        ]
+
+        for l in losses:
+            lines.append(
+                f"| `{l['trade_id']}` | **{l['symbol']}** | {l['direction']} | {l['lot_size']} | "
+                f"{l['entry_price']:.2f} ➔ {l['exit_price']:.2f} | **{l['rr_realized']:.2f}R** | "
+                f"**-${abs(l['net_pnl']):.2f}** | ${l['total_fund']:.2f} | ${l['after_trade_fund']:.2f} | "
+                f"*{l['trade_reason_summary']}* | **{l['what_improved']}** |"
+            )
+
+        if not losses:
+            lines.append("\n*No losing trades recorded yet in this forward-testing calibration window.*")
+
+        with open(file_path, "w") as f:
+            f.write("\n".join(lines) + "\n")
+
+    def export_visual_journal(self, file_path: str):
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        wins = self.get_profitable_trades()
+        losses = self.get_losing_trades()
+        all_trades = sorted(wins + losses, key=lambda x: x["closed_at"], reverse=True)
+
+        lines = [
+            "# 🖼️ TRADE VISUAL PROGRESS JOURNAL (BEFORE VS. AFTER AUDIT)",
+            f"*Side-by-side visual chart gallery rendered across all timeframes (H4, H1, M15) | Refreshed: {now}*\n"
+        ]
+
+        for t in all_trades:
+            t_id = t["trade_id"]
+            outcome = "WIN 🟢" if t["net_pnl"] > 0 else "LOSS 🔴"
+            pnl_str = f"+${t['net_pnl']:.2f}" if t["net_pnl"] > 0 else f"-${abs(t['net_pnl']):.2f}"
+
+            lines.append(f"## Trade `{t_id}`: **{t['symbol']}** — {t['direction']} ({outcome} {pnl_str} / {t['rr_realized']:+.2f}R)")
+            lines.append(f"- **Strategy**: `{t['strategy_framework']}` | **Hold**: `{t['hold_duration_hours']:.1f} hrs`")
+            lines.append(f"- **5W Summary**: *{t['trade_reason_summary']}*")
+            lines.append(f"- **Algorithm Delta**: `{t['what_improved']}`\n")
+
+            # Parse screenshot JSONs
+            try:
+                b_imgs = json.loads(t.get("before_screenshots_json") or "{}")
+            except Exception:
+                b_imgs = {}
+            try:
+                a_imgs = json.loads(t.get("after_screenshots_json") or "{}")
+            except Exception:
+                a_imgs = {}
+
+            lines.append("| Timeframe | BEFORE Trade Setup | AFTER Trade Outcome |")
+            lines.append("| :---: | :---: | :---: |")
+
+            for tf in ["H4", "H1", "M15"]:
+                b_path = b_imgs.get(tf, f"data/trade_charts/{t_id}/BEFORE_{tf}.png")
+                a_path = a_imgs.get(tf, f"data/trade_charts/{t_id}/AFTER_{tf}.png")
+                lines.append(f"| **{tf}** | ![{tf} Before]({b_path}) | ![{tf} After]({a_path}) |")
+
+            lines.append("\n---\n")
+
+        if not all_trades:
+            lines.append("*No visual trade journals generated yet. Visual comparisons appear here as trades complete.*")
+
+        with open(file_path, "w") as f:
+            f.write("\n".join(lines) + "\n")

@@ -136,33 +136,6 @@ class CapitalAdvisor:
         best_tip: TradingTip = top_candidate["tip"]
         best_viab: Dict[str, Any] = top_candidate["viability"]
 
-        result = {
-            "capital_analyzed": capital,
-            "readiness": readiness,
-            "recommended_instrument": top_candidate["symbol"],
-            "recommended_lot_size": best_viab["recommended_lot"],
-            "dollar_risk": best_viab["actual_dollar_risk"],
-            "risk_percent": best_viab["risk_percent"],
-            "margin_required": best_viab["margin_required"],
-            "direction": best_tip.direction,
-            "entry_zone": f"{best_tip.entry_min:.2f} — {best_tip.entry_max:.2f}",
-            "stop_loss": best_tip.stop_loss,
-            "sl_points": best_tip.sl_points,
-            "take_profit_1": best_tip.take_profit_1,
-            "take_profit_2": best_tip.take_profit_2,
-            "tp1_points": best_tip.tp1_points,
-            "risk_reward_ratio": f"1:{best_tip.risk_reward_ratio}",
-            "break_even_trigger": best_tip.break_even_trigger_price,
-            "hold_time_estimate": f"{best_tip.estimated_hold_hours} hours (~{best_tip.estimated_hold_candles} H1 candles)",
-            "primary_strategy": best_tip.primary_strategy,
-            "market_regime": best_tip.market_regime,
-            "confluence_reasons": best_tip.confluence_reasons,
-            "champions_rule": best_tip.champions_rule_match,
-            "council_edge_note": latest_council_note,
-            "disqualified_instruments": disqualified[:3],
-            "total_candidates_analyzed": len(self.SYNTHETIC_INSTRUMENTS)
-        }
-
         report_md = self.generate_markdown_ticket(result)
         os.makedirs("reports", exist_ok=True)
         with open("reports/LATEST_ADVICE.md", "w") as f:

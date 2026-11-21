@@ -23,6 +23,18 @@ Runs 24/7 autonomously inside **GitHub Actions** across distinct hedge-fund oper
 
 ---
 
+## 📑 LIVE REPORTS & REPOSITORIES
+
+| Report | Purpose | Update Cadence |
+| :--- | :--- | :--- |
+| **[`reports/LATEST_ADVICE.md`](reports/LATEST_ADVICE.md)** | Live $100 Capital Advisor Ticket (lot, entry, SL, TP, hold time) | Hourly (`hourly_execution_desk.yml`) |
+| **[`reports/PROFIT_LEDGER.md`](reports/PROFIT_LEDGER.md)** | All winning trades, pre/post fund balance, 5W thesis & vault accumulation | Real-time on trade win |
+| **[`reports/LOSS_LEDGER.md`](reports/LOSS_LEDGER.md)** | All losing trades, 5W root-cause diagnosis & `what_improved` algorithmic update | Real-time on trade loss |
+| **[`reports/TRADE_VISUAL_JOURNAL.md`](reports/TRADE_VISUAL_JOURNAL.md)** | Side-by-side BEFORE vs. AFTER multi-timeframe (`H4, H1, M15`) chart gallery | Daily & on trade exit |
+| **[`reports/TRAINING_DASHBOARD.md`](reports/TRAINING_DASHBOARD.md)** | 30-day calibration gate scoreboard, Monte Carlo pass rate, Sharpe/Sortino ratios | Daily (`daily_council_committee.yml`) |
+
+---
+
 ## ⚙️ TWO-STEP GITHUB SETUP
 
 1. **Enable Workflow Write Permissions**:

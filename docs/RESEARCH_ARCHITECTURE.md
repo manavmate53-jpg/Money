@@ -205,9 +205,68 @@ flowchart TD
   - $10.00 (50% of profit) is compounded into the active bankroll (new base: $110.00).
 - Vault funds are **locked and cannot be risked on future trades**.
 
-### 6.2 30-Day Graduation Criteria
-- Days Active: $\ge 30$
-- Total Resolved Trades: $\ge 30$
+---
+
+## 8. QUANTITATIVE TRADING MATHEMATICS & PROP SURVIVABILITY ENGINEERING (from https://youtu.be/vGSpbspmGoM)
+
+### 8.1 Effective Drawdown Budget vs. Nominal Balance
+In commercial prop firms and small-capital accounts, the nominal balance ($100) is a cosmetic illusion. The true capital available to trade is the maximum allowable drawdown budget:
+$$\text{Drawdown Budget } (\$) = \text{Starting Capital} \times \text{Max Drawdown \%} \quad (\text{e.g. } \$100 \times 15\% = \$15.00)$$
+$$\text{Survival Units} = \left\lfloor \frac{\text{Drawdown Budget (\S)}}{\text{Risk per Trade (\$)}}\right\rfloor$$
+At a risk of $\$1.50$ per trade on a $\$15.00$ drawdown floor, the account has exactly **10 survival units** (bullets) before catastrophic failure.
+
+### 8.2 Absorbing Barrier / First-Passage Probability
+Every trading epoch is modeled as an asymmetric random walk between two absorbing boundaries:
+- **Upper Absorbing Barrier**: $+\text{Profit Target}$ (e.g. $+20\%$ or $+\$20.00$)
+- **Lower Absorbing Barrier**: $-\text{Max Drawdown}$ (e.g. $-15\%$ or $-\$15.00$)
+
+Using Gambler's Ruin with drift:
+$$P(\text{Hit Target First}) = \frac{1 - \left(\frac{q}{p \cdot b}\right)^s}{1 - \left(\frac{q}{p \cdot b}\right)^{s + t}}$$
+where $s$ is steps to the drawdown floor, $t$ is steps to the target milestone, $p = W$, $q = 1 - W$, and $b = \text{R:R}$.
+
+### 8.3 Losing Streak Ruin Guarantee
+The probability of experiencing an unbroken sequence of $k$ consecutive losses is:
+$$P(k \text{ losses}) = (1 - W)^k$$
+At a 45% win rate, $P(8 \text{ consecutive losses}) = (0.55)^8 \approx 0.837\%$. Because an 8-loss cluster has a near-guaranteed cumulative occurrence across a 300-trade sample, position sizing MUST guarantee surviving at least $k = 8$ consecutive losses without touching the drawdown floor:
+$$\text{Max Risk per Trade} \le \frac{\text{Drawdown Budget}}{8} = \frac{\$15.00}{8} = \$1.875 \quad (\le 1.875\%)$$
+
+### 8.4 1,000-Path Monte Carlo Permutation Simulator
+Historical trade sequences are shuffled across 1,000 bootstrap permutations without replacement to break path dependency. The simulator measures:
+1. Probability of touching $+20\%$ before $-15\%$.
+2. The 95th-percentile worst drawdown across all permutations ($P_{95} \text{ Worst DD}$).
+3. Sequence variance and expected equity distribution.
+
+### 8.5 Dynamic Position Sizing Sweet-Spot Optimizer
+Risk per trade is dynamically constrained between **0.5% and 1.5%**:
+- **Under-Sizing Penalty ($< 0.4\%$)**: Account suffers trade stagnation, requiring too many steps and degrading under regime shift.
+- **Over-Sizing Penalty ($> 2.0\%$)**: Fatal vulnerability to losing streak clusters ($k \ge 5$).
+
+### 8.6 Net Real Return Accounting Across Epochs
+$$\text{Net Real Return (\$)} = \sum \text{Vaulted Payouts} - \sum (\text{Simulation Epoch Resets} \times \text{Initial Capital})$$
+
+### 8.7 Stochastic Hurst Exponent & CSPRNG Physics
+Deriv synthetic indices follow Geometric Brownian Motion:
+$$dS_t = \mu S_t dt + \sigma S_t dW_t$$
+The **Hurst Exponent ($H$)** is computed via Rescaled Range (R/S) analysis on log returns:
+- $H > 0.55$: **Persistent / Trending Regime** $\to$ Execute momentum and One-Time Framing.
+- $H < 0.45$: **Anti-Persistent / Mean-Reverting Regime** $\to$ Execute Value Area extremes and absorption fades.
+- $0.45 \le H \le 0.55$: **Pure Random Walk Chop** $\to$ Auto-skip entries to preserve capital.
+
+---
+
+## 9. MULTI-TIMEFRAME VISUAL JOURNAL & DEDICATED DATABASE SCHEMAS
+
+### 9.1 Multi-Timeframe BEFORE & AFTER Screenshot Architecture
+Every trade utilizes three synchronized timeframes: `H4` (Macro), `H1` (Structure), `M15` (Precision Entry).
+1. **At Trade Open**: Playwright captures `BEFORE_H4.png`, `BEFORE_H1.png`, and `BEFORE_M15.png`, stamps institutional corner telemetry (`TRADE_ID`, `SYMBOL`, `ENTRY`, `SL`, `TP`), compresses to $\le 250\text{ KB}$ via Pillow, and stores in `data/trade_charts/{trade_id}/`.
+2. **At Trade Close**: Playwright captures `AFTER_H4.png`, `AFTER_H1.png`, and `AFTER_M15.png`, updating `reports/TRADE_VISUAL_JOURNAL.md` with side-by-side visual audits.
+
+### 9.2 Strictly Separated SQLite Tables
+- **`active_trades`**: Holds pending and open positions with pre-trade fund telemetry.
+- **`profitable_trades`** (`net_pnl > 0`): Dedicated repository of all winning setups, complete fund accounting, 5W breakdown, and vault accumulation.
+- **`losing_trades`** (`net_pnl <= 0`): Dedicated repository of all losing setups, 5W root-cause analysis, and `what_improved` algorithmic updates.
+- Automated export of [`reports/PROFIT_LEDGER.md`](reports/PROFIT_LEDGER.md) and [`reports/LOSS_LEDGER.md`](reports/LOSS_LEDGER.md).
+
 - Profit Factor: $\ge 1.50$
 - Max Drawdown: $\le 10.0\%$
 - Status transition: `TRAINING_CALIBRATION` $\to$ `LIVE_READY`.

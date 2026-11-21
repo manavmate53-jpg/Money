@@ -169,6 +169,9 @@ class ConfluenceEngine:
 
         # Determine directional bias
         threshold = 0.45
+        if regime == "RANDOM_WALK_CHOP":
+            threshold = 0.65 # Auto-skip or elevate threshold during pure random-walk chop
+            reasons.append("Hurst Dynamics: 0.45 <= H <= 0.55 pure Brownian chop detected; elevated entry barrier enforced")
         if bullish_score > bearish_score and bullish_score >= threshold:
             direction = "BULLISH"
             confidence = min(0.95, bullish_score)

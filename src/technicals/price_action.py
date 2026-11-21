@@ -106,10 +106,14 @@ class PriceActionEngine:
     def classify_market_regime(self, df: pd.DataFrame) -> str:
         """
         Classifies regime into:
-        - DIRECTIONAL_TREND
-        - ROTATIONAL_RANGE
-        - HIGH_VOLATILITY_EXPANSION
+        - DIRECTIONAL_TREND (Hurst > 0.55 or ADX >= 25 or One-Time Framing)
+        - ROTATIONAL_RANGE (Hurst < 0.45 or Value Area oscillation)
+        - RANDOM_WALK_CHOP (0.45 <= Hurst <= 0.55 on low ADX)
+        - HIGH_VOLATILITY_EXPANSION (ATR > 1.8 * avg ATR)
         """
+        from src.risk.quant_engine import QuantEngine
+        quant = QuantEngine()
+
         atr_series = self.calculate_atr(df)
         adx_series = self.calculate_adx(df)
 
@@ -118,13 +122,18 @@ class PriceActionEngine:
         curr_adx = float(adx_series.iloc[-1])
 
         otf = self.check_one_time_framing(df, bars_back=2)
+        hurst = quant.calculate_hurst_exponent(df["close"].tolist())
 
         # High Volatility Expansion
         if curr_atr > (1.8 * avg_atr):
             return "HIGH_VOLATILITY_EXPANSION"
 
+        # Pure Random Walk Chop
+        if 0.46 <= hurst <= 0.54 and curr_adx < 22 and otf["status"] == "ROTATIONAL_NO_OTF":
+            return "RANDOM_WALK_CHOP"
+
         # Directional Trend
-        if curr_adx >= 25 or otf["status"] in ["BULLISH_ONE_TIME_FRAMING", "BEARISH_ONE_TIME_FRAMING"]:
+        if hurst > 0.55 or curr_adx >= 25 or otf["status"] in ["BULLISH_ONE_TIME_FRAMING", "BEARISH_ONE_TIME_FRAMING"]:
             return "DIRECTIONAL_TREND"
 
         # Otherwise Rotational

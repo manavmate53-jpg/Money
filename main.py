@@ -94,11 +94,16 @@ def cycle_hourly(dry_run: bool = False, capital: float = 100.0) -> dict:
         screenshot = chart_data["screenshot_path"]
 
         # 1. Resolve open trades (check entry fill, +1.0R break-even, TP/SL)
-        resolved = paper_trader.update_open_positions(sym, df)
+        resolved = paper_trader.update_open_positions(sym, df, scraper=scraper)
         for res in resolved:
             results["resolved_trades"] += 1
             console.print(f"[bold green]✓ Resolved Trade on {sym}: {res['outcome']} (${res['realized_pnl']:+.2f} / {res['realized_r']:+.2f}R)[/bold green]")
-            post_mortem.process_resolved_trade(res, screenshot)
+            post_mortem.process_resolved_trade(
+                res,
+                screenshot_path=screenshot,
+                before_screenshots=res.get("before_screenshots"),
+                after_screenshots=res.get("after_screenshots")
+            )
 
         # 2. Check Macro Alignment & Tactical Sniper Entry
         macro_info = macro_data.get(sym, {})
@@ -126,7 +131,7 @@ def cycle_hourly(dry_run: bool = False, capital: float = 100.0) -> dict:
                             lot_size=scaled_lot,
                             dollar_risk=viab["actual_dollar_risk"],
                             margin_req=viab["margin_required"],
-                            screenshot_path=screenshot
+                            scraper=scraper
                         )
                         results["new_trades"] += 1
                         console.print(f"  [bold green]★ Sniper Entry Placed: {sym} {tip.direction} | Lot: {scaled_lot} | Risk: ${viab['actual_dollar_risk']:.2f}[/bold green]")
@@ -345,8 +350,15 @@ def cmd_status():
 
     with db.get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM paper_trades WHERE status IN ('PENDING_ENTRY', 'OPEN', 'BREAK_EVEN')")
+        cursor.execute("SELECT * FROM active_trades WHERE status IN ('PENDING_ENTRY', 'OPEN', 'BREAK_EVEN')")
         trades = [dict(r) for r in cursor.fetchall()]
+        if not trades:
+            cursor.execute("SELECT * FROM paper_trades WHERE status IN ('PENDING_ENTRY', 'OPEN', 'BREAK_EVEN')")
+            trades = [dict(r) for r in cursor.fetchall()]
+
+    n_wins = len(db.get_profitable_trades())
+    n_losses = len(db.get_losing_trades())
+    console.print(f"[dim]Repository Ledgers: [green]{n_wins} Wins[/green] in reports/PROFIT_LEDGER.md | [red]{n_losses} Losses[/red] in reports/LOSS_LEDGER.md | Visuals in reports/TRADE_VISUAL_JOURNAL.md[/dim]")
 
     table = Table(title="Active Virtual Positions")
     table.add_column("ID", justify="right")

@@ -1,6 +1,6 @@
 # 📈 30-DAY CALIBRATION SCOREBOARD & VAULT TRACKER
 *Auto-updated daily by the Investment Council Committee (`daily_council_committee.yml`)*  
-*Last Refresh: **2026-11-21 19:12:39 UTC***
+*Last Refresh: **2026-11-21 19:22:22 UTC***
 
 ---
 
@@ -12,6 +12,10 @@
 | **Profit Factor** | **14.00** | $\\ge 1.50$ | ✅ PASSED |
 | **Max Drawdown** | **3.7%** | $\\le 10.0\%$ | ✅ PASSED |
 | **Rolling Win Rate** | **87.5%** | Baseline $> 50.0\%$ | ✅ HEALTHY |
+| **Monte Carlo Pass Prob** | **100.0%** | $\\ge 65.0\%$ (+20% before -15%) | ✅ PASSED |
+| **Monte Carlo P95 Worst DD** | **2.0R** | $\\le 10.0R$ | ✅ RESILIENT |
+| **Sharpe / Sortino Ratio** | **30.90 / 31.05** | Sharpe $\\ge 1.5$ / Sortino $\\ge 2.0$ | ✅ OPTIMAL |
+| **Net Real Return** | **$+0.00** | Payouts minus Resets | 🟢 PROFITABLE |
 
 ### Remaining Graduation Gate Blockers:
 ✅ All criteria fulfilled for live deployment!

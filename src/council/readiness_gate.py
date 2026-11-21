@@ -100,6 +100,15 @@ class ReadinessGate:
             except Exception:
                 days_elapsed = 1
 
+        from src.risk.quant_engine import QuantEngine
+        quant = QuantEngine()
+
+        r_multiples = [t["realized_r"] for t in trades if t["realized_r"] is not None]
+        mc_sim = quant.run_monte_carlo_permutation_sim(r_multiples, num_simulations=1000)
+        sharpe = quant.calculate_sharpe_ratio([t["realized_pnl"] for t in trades])
+        sortino = quant.calculate_sortino_ratio([t["realized_pnl"] for t in trades])
+        net_real_return = quant.compute_net_real_return(vault_balance, total_epochs - 1, starting_capital=100.0)
+
         blockers = []
         if days_elapsed < self.MIN_CALIBRATION_DAYS:
             blockers.append(f"Day {days_elapsed}/{self.MIN_CALIBRATION_DAYS} calibration window")
@@ -109,6 +118,8 @@ class ReadinessGate:
             blockers.append(f"Profit factor {profit_factor:.2f} < {self.MIN_PROFIT_FACTOR:.2f}")
         if max_dd_pct > self.MAX_ALLOWABLE_DRAWDOWN:
             blockers.append(f"Max DD {max_dd_pct:.1f}% > {self.MAX_ALLOWABLE_DRAWDOWN:.1f}%")
+        if mc_sim["probability_hit_target_first"] < 0.65:
+            blockers.append(f"Monte Carlo Target Pass Rate {mc_sim['probability_hit_target_first']*100:.1f}% < 65.0%")
 
         is_live_ready = len(blockers) == 0
         status = "LIVE_READY" if is_live_ready else f"TRAINING_CALIBRATION (Day {days_elapsed}/30)"
@@ -123,6 +134,11 @@ class ReadinessGate:
             "total_vaulted_profit": vault_balance,
             "active_bankroll": active_bankroll,
             "simulation_epochs": total_epochs,
+            "net_real_return": net_real_return,
+            "sharpe_ratio": sharpe,
+            "sortino_ratio": sortino,
+            "monte_carlo_p95_dd_r": mc_sim["p95_worst_drawdown_r"],
+            "monte_carlo_pass_probability": mc_sim["probability_hit_target_first"],
             "status": status,
             "is_live_ready": is_live_ready,
             "graduation_blockers": blockers
@@ -151,6 +167,10 @@ class ReadinessGate:
 | **Profit Factor** | **{m['profit_factor']:.2f}** | $\\ge 1.50$ | {'✅ PASSED' if m['profit_factor'] >= 1.50 else '❌ BELOW THRESHOLD'} |
 | **Max Drawdown** | **{m['max_drawdown_percent']:.1f}%** | $\\le 10.0\%$ | {'✅ PASSED' if m['max_drawdown_percent'] <= 10.0 else '❌ EXCEEDS CAP'} |
 | **Rolling Win Rate** | **{m['win_rate']*100:.1f}%** | Baseline $> 50.0\%$ | {'✅ HEALTHY' if m['win_rate'] >= 0.50 else '⚠️ MONITORING'} |
+| **Monte Carlo Pass Prob** | **{m.get('monte_carlo_pass_probability', 0.85)*100:.1f}%** | $\\ge 65.0\%$ (+20% before -15%) | {'✅ PASSED' if m.get('monte_carlo_pass_probability', 0.85) >= 0.65 else '❌ AT RISK'} |
+| **Monte Carlo P95 Worst DD** | **{m.get('monte_carlo_p95_dd_r', 6.0):.1f}R** | $\\le 10.0R$ | {'✅ RESILIENT' if m.get('monte_carlo_p95_dd_r', 6.0) <= 10.0 else '⚠️ ELEVATED'} |
+| **Sharpe / Sortino Ratio** | **{m.get('sharpe_ratio', 0.0):.2f} / {m.get('sortino_ratio', 0.0):.2f}** | Sharpe $\\ge 1.5$ / Sortino $\\ge 2.0$ | {'✅ OPTIMAL' if m.get('sharpe_ratio', 0.0) >= 1.5 else '⏳ ACCUMULATING'} |
+| **Net Real Return** | **${m.get('net_real_return', 0.0):+.2f}** | Payouts minus Resets | {'🟢 PROFITABLE' if m.get('net_real_return', 0.0) >= 0 else '🔴 DRAWDOWN'} |
 
 ### Remaining Graduation Gate Blockers:
 {blockers_str}
