@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db-journal
+*.db
+browser_profile/
+data/screenshots/
+.pytest_cache/

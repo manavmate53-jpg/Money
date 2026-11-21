@@ -1,0 +1,79 @@
+{
+  "source": "4 Trading Champions Trade the Same Session (Live Trading) - https://youtu.be/DD73wDVvObI",
+  "champions": {
+    "fabio_valentini": {
+      "title": "World Cup Scalping Champion",
+      "core_rules": [
+        {
+          "rule_name": "Rotational vs Directional Regime Filter",
+          "description": "Never execute breakout expansion lot sizing inside a rotational range. Identify Value Area High (VAH) and Value Area Low (VAL). If price oscillates within VAH-VAL without volume displacement, treat every boundary move as mean-reverting absorption, fading extremes back toward POC.",
+          "algorithmic_trigger": "regime == 'ROTATIONAL_RANGE'",
+          "execution_action": "Disqualify momentum breakout triggers; require boundary rejection candle at VAH or VAL before entry."
+        },
+        {
+          "rule_name": "Cover Risk to Zero (Break-Even Protection)",
+          "description": "Once price confirms aggressive displacement in our favor and achieves +1.0R open profit, immediately ratchet Stop Loss to Entry Price + spread (0R). Winning trades must never be allowed to reverse into full losses.",
+          "algorithmic_trigger": "unrealized_r >= 1.0",
+          "execution_action": "update_stop_loss(entry_price + spread)"
+        },
+        {
+          "rule_name": "Anti-Greed Session Walk-Away",
+          "description": "When price hits the designated daily structural target wall and daily/session realized profit reaches +3.0R, immediately close remaining runners and stop trading for the session. Prevent giving back profits through overtrading during late-session low-liquidity churn.",
+          "algorithmic_trigger": "session_realized_r >= 3.0",
+          "execution_action": "halt_new_entries_until_next_cycle()"
+        }
+      ]
+    },
+    "emir_gams": {
+      "title": "Proprietary Trader & Volume Profile Specialist",
+      "core_rules": [
+        {
+          "rule_name": "Strict One-Time Framing Rule",
+          "description": "A true directional trend is strictly defined by One-Time Framing. Bullish One-Time Framing requires each higher timeframe candle to print a Higher High, Higher Low, and Higher Close. Any candle printing a lower low immediately pauses directional expansion bias.",
+          "algorithmic_trigger": "high[t] > high[t-1] and low[t] > low[t-1] and close[t] > close[t-1]",
+          "execution_action": "Enforce trend alignment on H4/H1; disqualify counter-trend trades when HTF is one-time framing."
+        },
+        {
+          "rule_name": "Intraday Volatility Regime Adaptation",
+          "description": "Measure ATR_14 contraction vs expansion. When volatility compresses below 0.6x historical average, reduce position sizing by 30% and tighten target expectations; when volatility expands into extreme tails (> 2.5x ATR_14), demand wider structural stops and adjust lot size downward to maintain fixed dollar risk.",
+          "algorithmic_trigger": "atr_14_current / atr_14_historical",
+          "execution_action": "dynamically_scale_lot_size(fixed_dollar_risk, current_atr_sl)"
+        }
+      ]
+    },
+    "patrick_nill": {
+      "title": "2x World Cup Forex Champion",
+      "core_rules": [
+        {
+          "rule_name": "Zone Pullback Patience",
+          "description": "Never chase a market that departs impulsively without retesting the structural origin. If price leaves a high-probability demand/supply zone without filling our limit order, cancel the entry order rather than market-executing at degraded risk-to-reward.",
+          "algorithmic_trigger": "current_price > zone_high + (0.5 * atr_14) without fill",
+          "execution_action": "cancel_unfilled_entry_order()"
+        },
+        {
+          "rule_name": "Multi-Day Swing Holding Discipline",
+          "description": "When H4 structure exhibits clean liquidity sweeps and aligns with weekly bias, do not scalp out early for trivial 0.5R profits. Hold runners toward major opposing liquidity pools across multiple 4-hour sessions (holding 1 to 5 days).",
+          "algorithmic_trigger": "htf_alignment == True and major_liquidity_unmitigated == True",
+          "execution_action": "maintain_tp2_at_major_htf_pool()"
+        }
+      ]
+    },
+    "freddy_sarento": {
+      "title": "Former Bank Market Maker",
+      "core_rules": [
+        {
+          "rule_name": "Liquidity Magnet Levels",
+          "description": "Identify unmitigated equal highs (EQH) and equal lows (EQL) as high-probability magnet zones. Market structure moves deliberately toward resting liquidity before executing real reversal displacement.",
+          "algorithmic_trigger": "equal_highs_detected or equal_lows_detected",
+          "execution_action": "Anchor TP1 directly into resting liquidity pool."
+        },
+        {
+          "rule_name": "Hard Time-Window Cutoff Discipline",
+          "description": "If a trade remains stagnant inside the entry zone without achieving +0.5R or invalidation within 6 holding cycles (24 hours), market dynamics have shifted from expansion to decay. Close position at market to preserve emotional and risk capital.",
+          "algorithmic_trigger": "candles_held >= max_expected_candles * 1.5 and abs(unrealized_r) < 0.5",
+          "execution_action": "time_based_position_exit()"
+        }
+      ]
+    }
+  }
+}

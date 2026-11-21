@@ -1,0 +1,52 @@
+{
+  "framework": "ICT_SMC_PRIMEFX",
+  "version": "2.0.0",
+  "multi_timeframe_hierarchy": {
+    "HTF_macro_bias": "H4",
+    "ITF_structural_zones": "H1",
+    "LTF_precision_refinement": "M15"
+  },
+  "core_primitives": {
+    "fractal_swing_points": {
+      "definition": "N-bar pivot fractal where candle t is highest high of [t-N, t+N] (Swing High) or lowest low of [t-N, t+N] (Swing Low). Default N=2 (5-bar fractal) for M15 and N=3 (7-bar fractal) for H4.",
+      "validation": "Confirmed only upon close of candle t+N."
+    },
+    "market_structure_shift_mss_choch": {
+      "definition": "The first break and close of the most recent significant swing low in an uptrend (Bearish MSS) or most recent swing high in a downtrend (Bullish MSS).",
+      "requirement": "Must be accompanied by impulsive displacement (body close beyond level, not just wick sweep)."
+    },
+    "break_of_structure_bos": {
+      "definition": "Continuation break in the direction of the established trend. Higher High broken in uptrend, Lower Low broken in downtrend.",
+      "requirement": "Candle close outside previous swing fractal level."
+    },
+    "fair_value_gap_fvg": {
+      "bullish_fvg": "Candle 1 High < Candle 3 Low (3-candle imbalance). The gap [Candle 1 High, Candle 3 Low] represents inefficient buy-side delivery.",
+      "bearish_fvg": "Candle 1 Low > Candle 3 High. The gap [Candle 3 High, Candle 1 Low] represents inefficient sell-side delivery.",
+      "consequent_encroachment_ce": "50% midpoint of the FVG span: CE = (Gap_High + Gap_Low) / 2.",
+      "mitigation_rule": "An FVG is active until price trades into it. If price closes through the gap, it becomes inverted (IFVG)."
+    },
+    "order_block_ob": {
+      "bullish_ob": "The last down-close (bearish) candle before an impulsive upward displacement that creates an FVG and breaks structure (BOS/MSS).",
+      "bearish_ob": "The last up-close (bullish) candle before an impulsive downward displacement that creates an FVG and breaks structure.",
+      "invalidation": "Stop loss is placed beyond the extreme wick of the Order Block candle."
+    },
+    "liquidity_sweeps": {
+      "buy_side_liquidity_bsl": "Resting stop orders above equal highs (EQH), old swing highs, or session highs.",
+      "sell_side_liquidity_ssl": "Resting stop orders below equal lows (EQL), old swing lows, or session lows.",
+      "sweep_confirmation": "Price pierces liquidity level with wick but closes back inside range within 1-2 candles, indicating absorption rather than expansion."
+    },
+    "premium_discount_equilibrium": {
+      "equilibrium_50": "(Swing_High + Swing_Low) / 2",
+      "premium_zone": "Price > Equilibrium. Look ONLY for short entries or TP exits.",
+      "discount_zone": "Price < Equilibrium. Look ONLY for long entries or TP exits."
+    },
+    "optimal_trade_entry_ote": {
+      "fib_levels": {
+        "shallow_boundary": 0.618,
+        "sweet_spot": 0.705,
+        "deep_boundary": 0.786
+      },
+      "rule": "Long entries require retracement into 0.618-0.786 discount range overlapping an unmitigated bullish OB or FVG. Short entries require retracement into 0.618-0.786 premium range overlapping an unmitigated bearish OB or FVG."
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "sandbox_starting_capital": 100.0,
+  "sandbox_bankruptcy_threshold": 15.0,
+  "sandbox_auto_reset": true,
+  "training_risk_percent_range": [1.0, 4.0],
+  "live_ready_risk_percent": 1.5,
+  "live_hard_cap_risk_percent": 2.0,
+  "max_concurrent_positions_small_account": 1,
+  "minimum_risk_reward_ratio": 2.5,
+  "profit_lock_vault": {
+    "enabled": true,
+    "growth_trigger_percent": 20.0,
+    "vault_take_home_percent": 50.0,
+    "compound_reinvest_percent": 50.0
+  },
+  "in_trade_rules": {
+    "break_even_trigger_r_multiple": 1.0,
+    "move_sl_to_entry_plus_spread": true
+  },
+  "session_rules": {
+    "walk_away_daily_realized_r": 3.0,
+    "max_consecutive_losses_cooldown": 3,
+    "cooldown_duration_hours": 12
+  },
+  "small_account_guardrail": {
+    "account_size": 100.0,
+    "max_allowed_dollar_risk": 2.0,
+    "min_free_margin_buffer_ratio": 5.0,
+    "preferred_instruments": ["1HZ25V", "1HZ50V", "1HZ75V", "STEPINDEX"],
+    "disqualified_instruments_default": ["R_75", "R_100", "R_50"]
+  }
+}

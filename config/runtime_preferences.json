@@ -1,0 +1,17 @@
+{
+  "execution_mode": "ADVISORY_PAPER_SIMULATION",
+  "comment_execution_mode": "Options: ADVISORY_PAPER_SIMULATION | DIRECT_DERIV_API",
+  "notification_channel": "CLI_MARKDOWN_LOGS",
+  "comment_notification_channel": "Options: CLI_MARKDOWN_LOGS | TELEGRAM_BOT | DISCORD_WEBHOOK",
+  "account_currency": "USD",
+  "account_leverage": 1000,
+  "holding_style": "HYBRID_INTRADAY_SWING",
+  "comment_holding_style": "Hybrid H4/H1/M15 setups holding 4 to 36 hours",
+  "profit_lock_vault_split": {
+    "take_home_vault_percent": 50.0,
+    "compound_bankroll_percent": 50.0
+  },
+  "chart_scan_interval_hours": 4,
+  "default_capital": 100.0,
+  "log_level": "INFO"
+}

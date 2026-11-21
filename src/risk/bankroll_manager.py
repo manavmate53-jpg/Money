@@ -1,0 +1,177 @@
+"""
+Bankroll Manager & Two-Bucket Profit-Lock Vault ("Profit Comes Home With Us").
+Manages 30-day simulation auto-resets, profit sweeping, and anti-greed protections.
+"""
+
+import json
+import os
+from datetime import datetime, timezone
+from typing import Dict, Any, Optional
+from src.database.db_manager import DatabaseManager
+
+
+class BankrollManager:
+    def __init__(self, db: DatabaseManager, policy_path: str = "config/bankroll_policy.json"):
+        self.db = db
+        self.policy_path = policy_path
+        self.policy = self._load_policy()
+        self._sync_state()
+
+    def _load_policy(self) -> Dict[str, Any]:
+        if os.path.exists(self.policy_path):
+            with open(self.policy_path, "r") as f:
+                return json.load(f)
+        return {
+            "sandbox_starting_capital": 100.0,
+            "sandbox_bankruptcy_threshold": 15.0,
+            "sandbox_auto_reset": true,
+            "profit_lock_vault": {
+                "enabled": True,
+                "growth_trigger_percent": 20.0,
+                "vault_take_home_percent": 50.0,
+                "compound_reinvest_percent": 50.0
+            }
+        }
+
+    def _sync_state(self):
+        """Initializes or loads active bankroll, vault balance, and current epoch."""
+        active_bankroll = self.db.get_kv("active_bankroll")
+        vault_balance = self.db.get_kv("vault_balance")
+        epoch_number = self.db.get_kv("epoch_number")
+        base_watermark = self.db.get_kv("epoch_base_watermark")
+
+        starting_capital = self.policy.get("sandbox_starting_capital", 100.0)
+
+        if active_bankroll is None:
+            self.db.set_kv("active_bankroll", starting_capital)
+        if vault_balance is None:
+            self.db.set_kv("vault_balance", 0.0)
+        if epoch_number is None:
+            self.db.set_kv("epoch_number", 1)
+            self._record_epoch_start(1, starting_capital)
+        if base_watermark is None:
+            self.db.set_kv("epoch_base_watermark", starting_capital)
+
+    def _record_epoch_start(self, epoch_num: int, starting_bal: float):
+        now = datetime.now(timezone.utc).isoformat()
+        with self.db.get_connection() as conn:
+            conn.execute("""
+            INSERT INTO simulation_epochs (epoch_number, start_time, starting_balance, status)
+            VALUES (?, ?, ?, 'ACTIVE')
+            """, (epoch_num, now, starting_bal))
+            conn.commit()
+
+    def get_status(self) -> Dict[str, Any]:
+        return {
+            "epoch_number": int(self.db.get_kv("epoch_number", 1)),
+            "active_bankroll": float(self.db.get_kv("active_bankroll", 100.0)),
+            "vault_balance": float(self.db.get_kv("vault_balance", 0.0)),
+            "total_accumulated_capital": float(self.db.get_kv("active_bankroll", 100.0)) + float(self.db.get_kv("vault_balance", 0.0)),
+            "base_watermark": float(self.db.get_kv("epoch_base_watermark", 100.0)),
+            "bankruptcy_threshold": self.policy.get("sandbox_bankruptcy_threshold", 15.0)
+        }
+
+    def process_trade_result(self, dollar_pnl: float, r_multiple: float, symbol: str) -> Dict[str, Any]:
+        """
+        Updates bankroll after a trade closes.
+        Handles:
+        1. Bankruptcy detection & auto-reset.
+        2. Two-Bucket Profit-Lock Vault sweeping (+20% milestone).
+        """
+        current_bankroll = float(self.db.get_kv("active_bankroll", 100.0))
+        vault_balance = float(self.db.get_kv("vault_balance", 0.0))
+        epoch_num = int(self.db.get_kv("epoch_number", 1))
+        base_watermark = float(self.db.get_kv("epoch_base_watermark", 100.0))
+
+        new_bankroll = round(current_bankroll + dollar_pnl, 2)
+        bankruptcy_threshold = self.policy.get("sandbox_bankruptcy_threshold", 15.0)
+
+        # Check bankruptcy in training sandbox
+        if new_bankroll <= bankruptcy_threshold and self.policy.get("sandbox_auto_reset", True):
+            now = datetime.now(timezone.utc).isoformat()
+            # Mark current epoch as BANKRUPT
+            with self.db.get_connection() as conn:
+                conn.execute("""
+                UPDATE simulation_epochs
+                SET end_time = ?, final_balance = ?, status = 'BANKRUPT', reason = ?
+                WHERE epoch_number = ? AND status = 'ACTIVE'
+                """, (now, new_bankroll, f"Equity breached ${bankruptcy_threshold:.2f} threshold on {symbol}", epoch_num))
+                conn.commit()
+
+            # Start new epoch
+            next_epoch = epoch_num + 1
+            starting_cap = self.policy.get("sandbox_starting_capital", 100.0)
+            self.db.set_kv("epoch_number", next_epoch)
+            self.db.set_kv("active_bankroll", starting_cap)
+            self.db.set_kv("epoch_base_watermark", starting_cap)
+            self._record_epoch_start(next_epoch, starting_cap)
+
+            return {
+                "event": "EPOCH_RESET_BANKRUPTCY",
+                "old_epoch": epoch_num,
+                "new_epoch": next_epoch,
+                "final_balance": new_bankroll,
+                "reset_bankroll": starting_cap,
+                "vault_preserved": vault_balance,
+                "symbol": symbol,
+                "pnl": dollar_pnl
+            }
+
+        # Check Two-Bucket Profit-Lock Vault milestone
+        # Milestone trigger: growth of 20% above base_watermark
+        growth_trigger_pct = self.policy.get("profit_lock_vault", {}).get("growth_trigger_percent", 20.0)
+        vault_split_pct = self.policy.get("profit_lock_vault", {}).get("vault_take_home_percent", 50.0)
+
+        milestone_target = base_watermark * (1.0 + (growth_trigger_pct / 100.0))
+        vault_sweep_occurred = False
+        swept_to_vault = 0.0
+
+        if new_bankroll >= milestone_target:
+            profit_chunk = new_bankroll - base_watermark
+            swept_to_vault = round(profit_chunk * (vault_split_pct / 100.0), 2)
+            reinvested = round(profit_chunk - swept_to_vault, 2)
+
+            new_vault_balance = round(vault_balance + swept_to_vault, 2)
+            adjusted_active_bankroll = round(base_watermark + reinvested, 2)
+            new_watermark = adjusted_active_bankroll
+
+            self.db.set_kv("vault_balance", new_vault_balance)
+            self.db.set_kv("active_bankroll", adjusted_active_bankroll)
+            self.db.set_kv("epoch_base_watermark", new_watermark)
+
+            # Record in vault_ledger
+            now = datetime.now(timezone.utc).isoformat()
+            with self.db.get_connection() as conn:
+                conn.execute("""
+                INSERT INTO vault_ledger (
+                    timestamp, epoch_number, trigger_event,
+                    amount_swept_to_vault, amount_compounded,
+                    total_vault_balance, active_bankroll_balance
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    now, epoch_num, f"+{growth_trigger_pct}% Growth Sweep on {symbol}",
+                    swept_to_vault, reinvested, new_vault_balance, adjusted_active_bankroll
+                ))
+                conn.commit()
+
+            return {
+                "event": "PROFIT_VAULT_SWEEP",
+                "epoch_number": epoch_num,
+                "pnl": dollar_pnl,
+                "swept_to_vault": swept_to_vault,
+                "compounded_to_bankroll": reinvested,
+                "new_active_bankroll": adjusted_active_bankroll,
+                "total_vaulted": new_vault_balance,
+                "new_base_watermark": new_watermark
+            }
+
+        # Normal PnL update
+        self.db.set_kv("active_bankroll", new_bankroll)
+        return {
+            "event": "TRADE_RECORDED",
+            "epoch_number": epoch_num,
+            "pnl": dollar_pnl,
+            "r_multiple": r_multiple,
+            "active_bankroll": new_bankroll,
+            "vault_balance": vault_balance
+        }
