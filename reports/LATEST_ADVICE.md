@@ -1,6 +1,6 @@
 # 🏛 CAPITAL ADVISOR — $100 LIVE EXECUTION BLUEPRINT
 *Auto-updated every hour by the Execution & Risk Desk (`hourly_execution_desk.yml`)*  
-*Last Refresh: **2026-11-22 10:11:18 UTC***
+*Last Refresh: **2026-11-22 16:08:30 UTC***
 
 ---
 
@@ -30,18 +30,17 @@
 | **Recommended Lot Size** | **`0.005 lots`** | Granular nano-lot execution |
 | **Dollar Risk ($)** | **`$1.50`** | **0.0%** of $100 equity |
 | **Required Margin** | `$0.02` | Leverage 1:1000 |
-| **Entry Zone** | **`3283.98 - 3283.98`** | Structural entry band |
-| **Stop Loss (SL)** | **`3283.98`** | 0.0 points distance |
-| **Take Profit 1 (TP1)** | **`3283.98`** | Planned R:R: **1:2.0** |
-| **Take Profit 2 (TP2)** | **`3283.98`** | Major liquidity pool |
-| **Cover-Risk-to-Zero** | **`3283.98 (+1.0R displacement)`** | Ratchet SL to Break-Even at $+1.0R$ |
+| **Entry Zone** | **`3761.44 - 3761.44`** | Structural entry band |
+| **Stop Loss (SL)** | **`3761.44`** | 0.0 points distance |
+| **Take Profit 1 (TP1)** | **`3761.44`** | Planned R:R: **1:2.0** |
+| **Take Profit 2 (TP2)** | **`3761.44`** | Major liquidity pool |
+| **Cover-Risk-to-Zero** | **`3761.44 (+1.0R displacement)`** | Ratchet SL to Break-Even at $+1.0R$ |
 | **Estimated Hold Time** | **1.0 hours (1 bars)** | Based on $\\text{ATR}_{14}$ velocity |
 
 ---
 
 ## 🔍 4. CONFLUENCE SIGNALS
-- S&D: Price near unmitigated DROP_BASE_RALLY demand zone [3095.97 - 3204.90]
-- Candlestick Trigger: BEARISH_PIN_BAR
+
 
 ---
 
