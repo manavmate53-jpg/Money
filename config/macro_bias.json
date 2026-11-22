@@ -1,18 +1,114 @@
 {
-  "updated_at": "2026-11-21T19:11:37.573719+00:00",
+  "updated_at": "2026-11-22T12:18:24.495289+00:00",
   "generated_by": "Macro & Regime Desk (Gemini 2.5 Pro Vision + Quantitative Structure)",
   "instruments": {
     "1HZ25V": {
       "symbol": "1HZ25V",
-      "macro_bias": "BULLISH",
+      "macro_bias": "BEARISH",
       "confidence_score": 0.8,
-      "primary_regime": "ROTATIONAL_RANGE",
-      "h4_structural_zone": "Zone around 3559.19",
-      "key_invalidation_level": 3436.64,
-      "macro_target": 3804.29,
-      "summary_reasoning": "Deterministic structural bias BULLISH derived from ROTATIONAL_RANGE and SMC swing alignment.",
+      "primary_regime": "DIRECTIONAL_TREND",
+      "h4_structural_zone": "Zone around 2044.46",
+      "key_invalidation_level": 2153.69,
+      "macro_target": 1826.0,
+      "summary_reasoning": "Deterministic structural bias BEARISH derived from DIRECTIONAL_TREND and SMC swing alignment.",
       "display_name": "1HZ25V",
       "nano_lot_viable": true
+    },
+    "1HZ50V": {
+      "symbol": "1HZ50V",
+      "macro_bias": "BULLISH",
+      "confidence_score": 0.8,
+      "primary_regime": "DIRECTIONAL_TREND",
+      "h4_structural_zone": "Zone around 2607.89",
+      "key_invalidation_level": 2436.09,
+      "macro_target": 2951.48,
+      "summary_reasoning": "Deterministic structural bias BULLISH derived from DIRECTIONAL_TREND and SMC swing alignment.",
+      "display_name": "1HZ50V",
+      "nano_lot_viable": true
+    },
+    "1HZ75V": {
+      "symbol": "1HZ75V",
+      "macro_bias": "NEUTRAL",
+      "confidence_score": 0.5,
+      "primary_regime": "DIRECTIONAL_TREND",
+      "h4_structural_zone": "Zone around 887.81",
+      "key_invalidation_level": 989.81,
+      "macro_target": 683.79,
+      "summary_reasoning": "Deterministic structural bias NEUTRAL derived from DIRECTIONAL_TREND and SMC swing alignment.",
+      "display_name": "1HZ75V",
+      "nano_lot_viable": false
+    },
+    "STEPINDEX": {
+      "symbol": "STEPINDEX",
+      "macro_bias": "NEUTRAL",
+      "confidence_score": 0.5,
+      "primary_regime": "DIRECTIONAL_TREND",
+      "h4_structural_zone": "Zone around 8133.45",
+      "key_invalidation_level": 8218.04,
+      "macro_target": 7964.28,
+      "summary_reasoning": "Deterministic structural bias NEUTRAL derived from DIRECTIONAL_TREND and SMC swing alignment.",
+      "display_name": "STEPINDEX",
+      "nano_lot_viable": true
+    },
+    "1HZ10V": {
+      "symbol": "1HZ10V",
+      "macro_bias": "BULLISH",
+      "confidence_score": 0.8,
+      "primary_regime": "DIRECTIONAL_TREND",
+      "h4_structural_zone": "Zone around 6754.94",
+      "key_invalidation_level": 6648.32,
+      "macro_target": 6968.16,
+      "summary_reasoning": "Deterministic structural bias BULLISH derived from DIRECTIONAL_TREND and SMC swing alignment.",
+      "display_name": "1HZ10V",
+      "nano_lot_viable": false
+    },
+    "R_75": {
+      "symbol": "R_75",
+      "macro_bias": "BEARISH",
+      "confidence_score": 0.8,
+      "primary_regime": "DIRECTIONAL_TREND",
+      "h4_structural_zone": "Zone around 605023.81",
+      "key_invalidation_level": 647196.84,
+      "macro_target": 520677.74,
+      "summary_reasoning": "Deterministic structural bias BEARISH derived from DIRECTIONAL_TREND and SMC swing alignment.",
+      "display_name": "R_75",
+      "nano_lot_viable": false
+    },
+    "R_100": {
+      "symbol": "R_100",
+      "macro_bias": "NEUTRAL",
+      "confidence_score": 0.5,
+      "primary_regime": "DIRECTIONAL_TREND",
+      "h4_structural_zone": "Zone around 1203.91",
+      "key_invalidation_level": 1230.62,
+      "macro_target": 1150.48,
+      "summary_reasoning": "Deterministic structural bias NEUTRAL derived from DIRECTIONAL_TREND and SMC swing alignment.",
+      "display_name": "R_100",
+      "nano_lot_viable": false
+    },
+    "BOOM1000": {
+      "symbol": "BOOM1000",
+      "macro_bias": "BULLISH",
+      "confidence_score": 0.8,
+      "primary_regime": "DIRECTIONAL_TREND",
+      "h4_structural_zone": "Zone around 10309.97",
+      "key_invalidation_level": 10027.49,
+      "macro_target": 10874.93,
+      "summary_reasoning": "Deterministic structural bias BULLISH derived from DIRECTIONAL_TREND and SMC swing alignment.",
+      "display_name": "BOOM1000",
+      "nano_lot_viable": false
+    },
+    "CRASH1000": {
+      "symbol": "CRASH1000",
+      "macro_bias": "BEARISH",
+      "confidence_score": 0.8,
+      "primary_regime": "DIRECTIONAL_TREND",
+      "h4_structural_zone": "Zone around 7592.54",
+      "key_invalidation_level": 7798.74,
+      "macro_target": 7180.12,
+      "summary_reasoning": "Deterministic structural bias BEARISH derived from DIRECTIONAL_TREND and SMC swing alignment.",
+      "display_name": "CRASH1000",
+      "nano_lot_viable": false
     }
   }
 }
