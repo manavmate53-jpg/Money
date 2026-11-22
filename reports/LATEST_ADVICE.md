@@ -1,6 +1,6 @@
 # 🏛 CAPITAL ADVISOR — $100 LIVE EXECUTION BLUEPRINT
 *Auto-updated every hour by the Execution & Risk Desk (`hourly_execution_desk.yml`)*  
-*Last Refresh: **2026-11-21 19:12:28 UTC***
+*Last Refresh: **2026-11-22 10:10:13 UTC***
 
 ---
 
@@ -28,14 +28,14 @@
 | Parameter | Exact Value | Notes |
 | :--- | :--- | :--- |
 | **Recommended Lot Size** | **`0.005 lots`** | Granular nano-lot execution |
-| **Dollar Risk ($)** | **`$0.00`** | **0.0%** of $100 equity |
+| **Dollar Risk ($)** | **`$1.50`** | **0.0%** of $100 equity |
 | **Required Margin** | `$0.01` | Leverage 1:1000 |
-| **Entry Zone** | **`2238.77 — 2238.77`** | Structural entry band |
-| **Stop Loss (SL)** | **`2238.7706`** | 0.0 points distance |
-| **Take Profit 1 (TP1)** | **`2238.7706`** | Planned R:R: **1:0.0** |
-| **Take Profit 2 (TP2)** | **`2238.7706`** | Major liquidity pool |
-| **Cover-Risk-to-Zero** | **`2238.7706`** | Ratchet SL to Break-Even at $+1.0R$ |
-| **Estimated Hold Time** | **1.0 hours (~1 H1 candles)** | Based on $\\text{ATR}_{14}$ velocity |
+| **Entry Zone** | **`2764.38 - 2764.38`** | Structural entry band |
+| **Stop Loss (SL)** | **`2764.38`** | 0.0 points distance |
+| **Take Profit 1 (TP1)** | **`2764.38`** | Planned R:R: **1:2.0** |
+| **Take Profit 2 (TP2)** | **`2764.38`** | Major liquidity pool |
+| **Cover-Risk-to-Zero** | **`2764.38 (+1.0R displacement)`** | Ratchet SL to Break-Even at $+1.0R$ |
+| **Estimated Hold Time** | **1.0 hours (1 bars)** | Based on $\\text{ATR}_{14}$ velocity |
 
 ---
 

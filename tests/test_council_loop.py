@@ -125,3 +125,16 @@ def test_gemini_council_macro_and_tactical_schemas(council_env):
     assert macro["macro_bias"] in ["BULLISH", "BEARISH", "NEUTRAL"]
     assert "key_invalidation_level" in macro
 
+
+def test_capital_advisor_blueprint(council_env):
+    db, pm, gate, _ = council_env
+    from src.advisor.capital_advisor import CapitalAdvisor
+    advisor = CapitalAdvisor(db)
+    result = advisor.advise(capital=100.0)
+    assert result["capital_analyzed"] == 100.0
+    assert result["recommended_instrument"]
+    assert "dollar_risk" in result
+    assert result["dollar_risk"] <= 2.0  # Safe for $100 account
+    assert os.path.exists("reports/LATEST_ADVICE.md")
+
+

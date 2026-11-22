@@ -136,6 +136,36 @@ class CapitalAdvisor:
         best_tip: TradingTip = top_candidate["tip"]
         best_viab: Dict[str, Any] = top_candidate["viability"]
 
+        sl_dist = abs(best_tip.entry_max - best_tip.stop_loss)
+        be_price = best_tip.entry_max + sl_dist if best_tip.direction == "BULLISH" else best_tip.entry_max - sl_dist
+
+        hold_time_str = f"{best_tip.estimated_hold_hours:.1f} hours ({best_tip.estimated_hold_candles} bars)"
+
+        result = {
+            "capital_analyzed": capital,
+            "readiness": readiness,
+            "recommended_instrument": best_tip.symbol,
+            "direction": best_tip.direction,
+            "market_regime": best_tip.market_regime,
+            "primary_strategy": best_tip.primary_strategy,
+            "champions_rule": best_tip.champions_rule_match,
+            "recommended_lot_size": best_viab.get("lot_size", 0.005),
+            "dollar_risk": best_viab.get("dollar_risk", capital * 0.015),
+            "risk_percent": best_viab.get("risk_percent", 1.5),
+            "margin_required": best_viab.get("margin_required", 1.0),
+            "entry_zone": f"{min(best_tip.entry_min, best_tip.entry_max):.2f} - {max(best_tip.entry_min, best_tip.entry_max):.2f}",
+            "stop_loss": f"{best_tip.stop_loss:.2f}",
+            "sl_points": f"{best_viab.get('sl_points', 0):.1f}",
+            "take_profit_1": f"{best_tip.take_profit_1:.2f}",
+            "take_profit_2": f"{best_tip.take_profit_2:.2f}",
+            "risk_reward_ratio": f"1:{best_viab.get('risk_reward_ratio', 2.0):.1f}",
+            "break_even_trigger": f"{be_price:.2f} (+1.0R displacement)",
+            "hold_time_estimate": hold_time_str,
+            "confluence_reasons": best_tip.confluence_reasons,
+            "council_edge_note": latest_council_note,
+            "disqualified_instruments": disqualified,
+        }
+
         report_md = self.generate_markdown_ticket(result)
         os.makedirs("reports", exist_ok=True)
         with open("reports/LATEST_ADVICE.md", "w") as f:

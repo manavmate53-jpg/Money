@@ -149,12 +149,7 @@ class DerivWsInterceptor:
         Attempts WebSocket fetch first; falls back gracefully to calibrated synthetic feed.
         """
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # Avoid nesting loop
-                df = None
-            else:
-                df = loop.run_until_complete(self.fetch_candles_ws(symbol, timeframe, count))
+            df = asyncio.run(self.fetch_candles_ws(symbol, timeframe, count))
         except Exception:
             df = None
 

@@ -1,13 +1,13 @@
 # 📈 30-DAY CALIBRATION SCOREBOARD & VAULT TRACKER
 *Auto-updated daily by the Investment Council Committee (`daily_council_committee.yml`)*  
-*Last Refresh: **2026-11-21 19:22:22 UTC***
+*Last Refresh: **2026-11-22 10:10:13 UTC***
 
 ---
 
 ## 🎯 1. GRADUATION GATE STATUS: `LIVE_READY`
 | Metric | Current Value | Required Live Gate | Status |
 | :--- | :--- | :--- | :--- |
-| **Calibration Window** | Day **52** / 30 | 30 full calendar days | ✅ PASSED |
+| **Calibration Window** | Day **53** / 30 | 30 full calendar days | ✅ PASSED |
 | **Resolved Sample** | **40** trades | $\\ge 30$ resolved trades | ✅ PASSED |
 | **Profit Factor** | **14.00** | $\\ge 1.50$ | ✅ PASSED |
 | **Max Drawdown** | **3.7%** | $\\le 10.0\%$ | ✅ PASSED |
