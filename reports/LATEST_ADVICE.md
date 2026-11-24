@@ -1,6 +1,6 @@
 # 🏛 CAPITAL ADVISOR — $100 LIVE EXECUTION BLUEPRINT
 *Auto-updated every hour by the Execution & Risk Desk (`hourly_execution_desk.yml`)*  
-*Last Refresh: **2026-11-24 02:06:01 UTC***
+*Last Refresh: **2026-11-24 13:30:41 UTC***
 
 ---
 
@@ -10,7 +10,7 @@
 - **Rolling Win Rate**: **0.0%**
 - **Profit Factor**: **0.00** (Target: $\\ge 1.50$)
 - **Max Drawdown**: **0.0%** (Target: $\\le 10.0\%$)
-- **Active Bankroll**: **$100.00**
+- **Active Bankroll**: **$98.70**
 - **Locked Profit Vault ("Profit Brought Home")**: **$0.00**
 
 ---
@@ -30,11 +30,11 @@
 | **Recommended Lot Size** | **`0.005 lots`** | Granular nano-lot execution |
 | **Dollar Risk ($)** | **`$1.50`** | **0.0%** of $100 equity |
 | **Required Margin** | `$0.01` | Leverage 1:1000 |
-| **Entry Zone** | **`2824.79 - 2824.79`** | Structural entry band |
-| **Stop Loss (SL)** | **`2824.79`** | 0.0 points distance |
-| **Take Profit 1 (TP1)** | **`2824.79`** | Planned R:R: **1:2.0** |
-| **Take Profit 2 (TP2)** | **`2824.79`** | Major liquidity pool |
-| **Cover-Risk-to-Zero** | **`2824.79 (+1.0R displacement)`** | Ratchet SL to Break-Even at $+1.0R$ |
+| **Entry Zone** | **`2108.41 - 2108.41`** | Structural entry band |
+| **Stop Loss (SL)** | **`2108.41`** | 0.0 points distance |
+| **Take Profit 1 (TP1)** | **`2108.41`** | Planned R:R: **1:2.0** |
+| **Take Profit 2 (TP2)** | **`2108.41`** | Major liquidity pool |
+| **Cover-Risk-to-Zero** | **`2108.41 (+1.0R displacement)`** | Ratchet SL to Break-Even at $+1.0R$ |
 | **Estimated Hold Time** | **1.0 hours (1 bars)** | Based on $\\text{ATR}_{14}$ velocity |
 
 ---
@@ -45,6 +45,6 @@
 ---
 
 ## ⚠️ 5. GEMINI COUNCIL WARNING / EDGE NOTE
-> *Enforce break-even ratchet (+1.0R) immediately upon displacement away from entry.*
+> *[1HZ75V] Require minimum 2-candle confirmation after liquidity sweep on 1HZ75V.*
 
 

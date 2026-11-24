@@ -75,3 +75,11 @@ Persistent lessons, post-mortems, and strategy mutations.
 - **Council Strategist Rule Mutation**: Reinforce SMC_ICT weighting on 1HZ25V during current regime.
 
 ---
+
+### [2026-11-24 13:30:08 UTC] 1HZ75V — LOSS ($-1.30 / -1.00R)
+- **Strategy**: `SMC_ICT`
+- **Structure Auditor**: Structural invalidation: Price wicked into unmitigated pool before reversing.
+- **Risk Critic**: Risk alert: Entry occurred too early without waiting for absorption confirmation.
+- **Council Strategist Rule Mutation**: Require minimum 2-candle confirmation after liquidity sweep on 1HZ75V.
+
+---
