@@ -59,16 +59,16 @@
       "contract_size": 1.0,
       "tick_size": 0.01,
       "point_value": 1.0,
-      "min_lot": 0.005,
+      "min_lot": 0.05,
       "max_lot": 25.0,
-      "volume_step": 0.001,
+      "volume_step": 0.01,
       "margin_percent": 0.1,
       "leverage": 1000,
       "average_spread_points": 0.10,
       "tick_speed_seconds": 1,
       "volatility_tier": 75,
-      "is_nano_lot_friendly": true,
-      "description": "Synthetic index with 75% annualized volatility, 1-second ticks, and 0.005 nano-lot granularity."
+      "is_nano_lot_friendly": false,
+      "description": "Synthetic index with 75% annualized volatility and updated 0.05 MT5 minimum lot; filtered on small $100 accounts when structural stop > $2."
     },
     "R_10": {
       "display_name": "Volatility 10 Index",

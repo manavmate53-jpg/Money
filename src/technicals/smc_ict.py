@@ -228,39 +228,58 @@ class SmcIctEngine:
 
     def detect_liquidity_sweeps(self, df: pd.DataFrame, lookback: int = 20) -> Dict[str, Any]:
         """
-        Detects sweeps of Buy-Side (BSL) or Sell-Side (SSL) Liquidity.
-        Sweep occurs when price wicks beyond a swing point but closes back inside.
+        Detects sweeps of Buy-Side (BSL) or Sell-Side (SSL) Liquidity and counts closed
+        confirmation candles holding away from the swept level (preventing single-wick traps).
         """
         if len(df) < lookback:
-            return {"bsl_swept": False, "ssl_swept": False, "sweep_level": None}
+            return {
+                "bsl_swept": False,
+                "ssl_swept": False,
+                "sweep_level": None,
+                "confirmation_candles": 0,
+            }
 
-        recent_df = df.iloc[-lookback:].copy()
-        high_level = float(recent_df["high"].iloc[:-2].max())
-        low_level = float(recent_df["low"].iloc[:-2].min())
-
-        last_candle = df.iloc[-1]
-        prev_candle = df.iloc[-2]
+        recent_df = df.iloc[-lookback:].copy().reset_index(drop=True)
+        scan_window = min(5, len(recent_df) - 2)
+        ref_slice = recent_df.iloc[:-scan_window] if scan_window > 0 else recent_df.iloc[:-2]
+        high_level = float(ref_slice["high"].max())
+        low_level = float(ref_slice["low"].min())
 
         bsl_swept = False
         ssl_swept = False
         sweep_level = None
+        confirmation_candles = 0
 
-        # BSL sweep: Wicked above previous high, closed below it
-        if (last_candle["high"] > high_level and last_candle["close"] < high_level) or \
-           (prev_candle["high"] > high_level and last_candle["close"] < high_level):
-            bsl_swept = True
-            sweep_level = high_level
+        tail_candles = recent_df.iloc[-scan_window:]
 
-        # SSL sweep: Wicked below previous low, closed above it
-        if (last_candle["low"] < low_level and last_candle["close"] > low_level) or \
-           (prev_candle["low"] < low_level and last_candle["close"] > low_level):
-            ssl_swept = True
-            sweep_level = low_level
+        # Scan backward for most recent SSL sweep and count subsequent bullish closes above low_level
+        for rel_idx in range(len(tail_candles)):
+            row = tail_candles.iloc[rel_idx]
+            if row["low"] < low_level and row["close"] > low_level:
+                following = tail_candles.iloc[rel_idx:]
+                if all(following["close"] > low_level):
+                    ssl_swept = True
+                    sweep_level = low_level
+                    confirmation_candles = len(following)
+                    break
+
+        # Scan for most recent BSL sweep and count subsequent bearish closes below high_level
+        if not ssl_swept:
+            for rel_idx in range(len(tail_candles)):
+                row = tail_candles.iloc[rel_idx]
+                if row["high"] > high_level and row["close"] < high_level:
+                    following = tail_candles.iloc[rel_idx:]
+                    if all(following["close"] < high_level):
+                        bsl_swept = True
+                        sweep_level = high_level
+                        confirmation_candles = len(following)
+                        break
 
         return {
             "bsl_swept": bsl_swept,
             "ssl_swept": ssl_swept,
             "sweep_level": sweep_level,
+            "confirmation_candles": confirmation_candles,
             "major_high": high_level,
             "major_low": low_level
         }

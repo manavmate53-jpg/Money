@@ -1,0 +1,26 @@
+{
+  "version": "1.0.0",
+  "updated_at": "2026-11-25T09:55:00+00:00",
+  "min_sweep_confirmation_candles": 2,
+  "max_pending_hours": 6,
+  "min_rr_ratio": 2.0,
+  "atr_sl_buffer_multiplier": 0.5,
+  "entry_zone_m15_atr_width": 0.25,
+  "require_macro_bias_alignment": true,
+  "blocked_regimes_by_symbol": {
+    "1HZ75V": ["RANDOM_WALK_CHOP"]
+  },
+  "symbol_overrides": {
+    "1HZ75V": {
+      "min_sweep_confirmation_candles": 2,
+      "min_rr_ratio": 2.2
+    }
+  },
+  "recent_mutations": [
+    {
+      "trade_id": "TRD-20261122160735-1HZ7",
+      "symbol": "1HZ75V",
+      "rule": "Require minimum 2-candle confirmation after liquidity sweep and block unviable $100 lots on 1HZ75V."
+    }
+  ]
+}

@@ -83,3 +83,11 @@ Persistent lessons, post-mortems, and strategy mutations.
 - **Council Strategist Rule Mutation**: Require minimum 2-candle confirmation after liquidity sweep on 1HZ75V.
 
 ---
+
+### [2026-11-25 10:01:05 UTC] 1HZ75V — LOSS ($-1.30 / -1.00R) · `gemini-2.5-flash`
+- **Strategy**: `SMC_ICT`
+- **Structure Auditor**: The trade was a premature bullish entry following an SSL sweep that failed to hold. Price continued to decline significantly, indicating that the initial sweep was either incomplete, a fakeout, or the underlying market structure remained bearish, invalidating the bullish reversal premise. The entry lacked sufficient confirmation of a true structural shift.
+- **Risk Critic**: The 1.00R loss is a direct consequence of a flawed entry premise, not necessarily poor stop-loss placement relative to the entry. While the planned R:R was adequate, the probability of success for this specific setup was low, leading to an avoidable loss of capital. The extended hold duration of 45.4 hours suggests the trade was allowed to linger without positive price action, tying up capital unnecessarily.
+- **Council Strategist Rule Mutation**: Increase the minimum confirmation candles required after an SSL sweep to ensure stronger validation of a potential reversal. Specifically, require at least 2 bullish confirmation candles on the entry timeframe after a sweep before initiating a long position.
+
+---

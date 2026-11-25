@@ -150,6 +150,35 @@ def test_loss_routing_and_5w_export(clean_db):
     assert losses[0]["net_pnl"] == -1.40
     assert losses[0]["what_improved"] == "Penalized counter-trend range fades during expansion"
 
+    # Verify unified UNION ALL query across wins + losses
+    resolved = db.get_resolved_trades(epoch_id=1)
+    assert len(resolved) == 1
+    assert resolved[0]["trade_id"] == "TRD-002"
+    assert resolved[0]["outcome"] == "LOSS"
+
+    # Verify mark_trade_expired removes stale pending order cleanly without touching losses
+    db.record_active_trade({
+        "trade_id": "TRD-STALE",
+        "epoch_id": 1,
+        "symbol": "1HZ25V",
+        "direction": "BULLISH",
+        "entry_min": 2800.0,
+        "entry_max": 2810.0,
+        "tp_price": 2850.0,
+        "sl_price": 2780.0,
+        "original_sl": 2780.0,
+        "lot_size": 0.005,
+        "dollar_risk": 0.5,
+        "margin_required": 0.1,
+        "total_fund": 100.0,
+        "used_fund": 0.6,
+        "status": "PENDING_ENTRY",
+        "opened_at": "2026-11-22T00:00:00+00:00"
+    })
+    assert db.mark_trade_expired("TRD-STALE", "TTL exceeded") is True
+    assert len(db.get_active_trades()) == 0
+    assert len(db.get_resolved_trades(epoch_id=1)) == 1
+
     # Export ledgers to temp dir and verify Markdown files exist
     reports_dir = os.path.join(tmp_dir, "reports")
     db.export_all_ledgers(reports_dir)

@@ -330,6 +330,84 @@ class DatabaseManager:
             cursor.execute("SELECT * FROM active_trades ORDER BY opened_at DESC")
             return [dict(r) for r in cursor.fetchall()]
 
+    def get_resolved_trades(self, epoch_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        """
+        Unified query returning resolved trades across profitable_trades and losing_trades
+        via UNION ALL ordered chronologically by closed_at ASC.
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            if epoch_id is not None:
+                cursor.execute("""
+                SELECT *, 'WIN' AS outcome FROM profitable_trades WHERE epoch_id = ?
+                UNION ALL
+                SELECT *, 'LOSS' AS outcome FROM losing_trades WHERE epoch_id = ?
+                ORDER BY closed_at ASC
+                """, (epoch_id, epoch_id))
+            else:
+                cursor.execute("""
+                SELECT *, 'WIN' AS outcome FROM profitable_trades
+                UNION ALL
+                SELECT *, 'LOSS' AS outcome FROM losing_trades
+                ORDER BY closed_at ASC
+                """)
+            return [dict(r) for r in cursor.fetchall()]
+
+    def get_active_epoch_info(self) -> Dict[str, Any]:
+        """Returns the latest active simulation epoch metadata."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            SELECT epoch_number, start_time, starting_balance, status
+            FROM simulation_epochs
+            ORDER BY epoch_number DESC LIMIT 1
+            """)
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+        return {
+            "epoch_number": 1,
+            "start_time": datetime.now(timezone.utc).isoformat(),
+            "starting_balance": 100.0,
+            "status": "ACTIVE"
+        }
+
+    def mark_trade_expired(self, trade_id: str, reason: str = "EXPIRED_STALE") -> bool:
+        """
+        Cancels a stale or pre-entry invalidated PENDING_ENTRY order cleanly without
+        recording a realized PnL loss, and syncs active_trades & paper_trades.
+        """
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT symbol, opened_at FROM active_trades WHERE trade_id = ?", (trade_id,))
+            row = cursor.fetchone()
+            cursor.execute("DELETE FROM active_trades WHERE trade_id = ?", (trade_id,))
+            if row:
+                cursor.execute("""
+                UPDATE paper_trades
+                SET status = 'EXPIRED_STALE', closed_at = ?, notes = COALESCE(notes, '') || ' | ' || ?
+                WHERE trade_id = (
+                    SELECT MAX(trade_id) FROM paper_trades
+                    WHERE symbol = ? AND status IN ('PENDING_ENTRY', 'OPEN', 'BREAK_EVEN')
+                )
+                """, (now_iso, reason, row["symbol"]))
+            conn.commit()
+            return bool(row)
+
+    def sync_paper_trade_closure(self, symbol: str, outcome_status: str, exit_price: float, net_pnl: float, realized_r: float, hold_hours: float, closed_at: str):
+        """Keeps legacy paper_trades table synchronized with resolved trades."""
+        with self.get_connection() as conn:
+            conn.execute("""
+            UPDATE paper_trades
+            SET status = ?, closed_at = ?, exit_price = ?, realized_pnl = ?, realized_r = ?, hold_duration_hours = ?
+            WHERE trade_id = (
+                SELECT MAX(trade_id) FROM paper_trades
+                WHERE symbol = ? AND status IN ('PENDING_ENTRY', 'OPEN', 'BREAK_EVEN')
+            )
+            """, (outcome_status, closed_at, exit_price, net_pnl, realized_r, hold_hours, symbol))
+            conn.commit()
+
     def log_council_note(
         self,
         symbol: str,

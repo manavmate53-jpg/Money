@@ -1,11 +1,11 @@
 """
-Post-Mortem Engine with Multimodal Vision & 5W Self-Improvement Synthesis.
-Audits BEFORE and AFTER trade screenshots, applies Bayesian weight mutations,
-runs the 1,000-path Monte Carlo simulation, and synchronizes profit/loss ledgers.
+Post-Mortem Engine with Multimodal Vision, 5W Self-Improvement Synthesis,
+and Machine-Enforced Rule Mutations (config/active_filters.json).
 """
 
 import json
 import os
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 
 from src.database.db_manager import DatabaseManager
@@ -19,12 +19,16 @@ class PostMortemManager:
         db: DatabaseManager,
         council: Optional[GeminiCouncil] = None,
         quant_engine: Optional[QuantEngine] = None,
-        weights_path: str = "config/strategy_weights.json"
+        weights_path: str = "config/strategy_weights.json",
+        filters_path: str = "config/active_filters.json",
+        reports_dir: str = "reports",
     ):
         self.db = db
         self.council = council or GeminiCouncil()
         self.quant = quant_engine or QuantEngine()
         self.weights_path = weights_path
+        self.filters_path = filters_path
+        self.reports_dir = reports_dir
 
     def process_resolved_trade(
         self,
@@ -35,25 +39,31 @@ class PostMortemManager:
     ) -> Dict[str, Any]:
         """
         Runs Council multimodal post-mortem comparing BEFORE and AFTER screenshots,
-        updates 5W explanations and what_improved delta, mutates strategy weights,
-        and re-runs 1,000-path Monte Carlo simulation.
+        updates 5W explanations and what_improved delta, writes executable rules to
+        config/active_filters.json, mutates strategy_weights.json, runs Monte Carlo,
+        and re-exports Markdown ledgers.
         """
         t_id = str(trade_result.get("trade_id", ""))
         symbol = trade_result.get("symbol", "UNKNOWN")
         outcome = trade_result.get("outcome", "LOSS")
-        pnl = trade_result.get("realized_pnl", 0.0)
-        r_mult = trade_result.get("realized_r", 0.0)
-        strat = trade_result.get("strategy", "SMC_ICT")
+        pnl = float(trade_result.get("realized_pnl", 0.0) or 0.0)
+        r_mult = float(trade_result.get("realized_r", 0.0) or 0.0)
+        strat = trade_result.get("strategy", trade_result.get("strategy_framework", "SMC_ICT"))
 
-        # Pick primary screenshot for vision (prefer H1 After)
-        img_for_council = None
-        if after_screenshots and "H1" in after_screenshots and os.path.exists(after_screenshots["H1"]):
-            img_for_council = after_screenshots["H1"]
-        elif screenshot_path and os.path.exists(screenshot_path):
-            img_for_council = screenshot_path
+        before_h1 = before_screenshots.get("H1") if before_screenshots else None
+        after_h1 = after_screenshots.get("H1") if after_screenshots else None
 
-        # 1. Run Gemini Council
-        council_review = self.council.run_post_mortem(trade_result, img_for_council)
+        img_fallback = after_h1 if (after_h1 and os.path.exists(after_h1)) else (
+            screenshot_path if (screenshot_path and os.path.exists(screenshot_path)) else before_h1
+        )
+
+        # 1. Run Gemini Council Multimodal Audit
+        council_review = self.council.run_post_mortem(
+            trade_result,
+            image_path=img_fallback,
+            before_image_path=before_h1,
+            after_image_path=after_h1
+        )
 
         what_improved = council_review.get("actionable_rule_mutation", f"Reinforce risk discipline on {symbol}")
         diagnosis = council_review.get("structural_diagnosis", "")
@@ -71,7 +81,7 @@ class PostMortemManager:
             raw_response=council_review.get("raw_response")
         )
 
-        # 3. Update what_improved and 5W fields in database
+        # 3. Update 5W fields & what_improved in split profit/loss table
         target_table = "profitable_trades" if pnl > 0 else "losing_trades"
         with self.db.get_connection() as conn:
             conn.execute(f"""
@@ -81,16 +91,20 @@ class PostMortemManager:
             """, (what_improved, f"{diagnosis} | {criticism}", t_id))
             conn.commit()
 
-        # 4. Mutate Bayesian Strategy Weights
+        # 4. Write machine-enforceable rules into config/active_filters.json
+        self._update_active_filters(symbol=symbol, trade_id=t_id, outcome=outcome, review=council_review)
+
+        # 5. Mutate Bayesian Strategy Weights
         self._mutate_weights(
             symbol=symbol,
             strategy=strat,
             outcome=outcome,
-            r_multiple=r_mult
+            r_multiple=r_mult,
+            suggested_deltas=council_review.get("weight_adjustment")
         )
 
-        # 5. Re-run 1,000-Path Monte Carlo Permutation Check
-        all_r = []
+        # 6. Re-run 1,000-Path Monte Carlo Permutation Check
+        all_r: List[float] = []
         with self.db.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT rr_realized FROM profitable_trades UNION ALL SELECT rr_realized FROM losing_trades")
@@ -100,12 +114,73 @@ class PostMortemManager:
         mc_res = self.quant.run_monte_carlo_permutation_sim(all_r, num_simulations=1000)
         council_review["monte_carlo_res"] = mc_res
 
-        # 6. Re-export Markdown Ledgers & Visual Journal
-        self.db.export_all_ledgers()
+        # 7. Re-export Markdown Ledgers & Visual Journal
+        self.db.export_all_ledgers(reports_dir=self.reports_dir)
 
         return council_review
 
-    def _mutate_weights(self, symbol: str, strategy: str, outcome: str, r_multiple: float):
+    def _update_active_filters(self, symbol: str, trade_id: str, outcome: str, review: Dict[str, Any]):
+        """Persists structured machine-enforced parameters to config/active_filters.json."""
+        if not self.filters_path:
+            return
+        os.makedirs(os.path.dirname(os.path.abspath(self.filters_path)), exist_ok=True)
+
+        data: Dict[str, Any] = {
+            "version": "1.0.0",
+            "min_sweep_confirmation_candles": 2,
+            "max_pending_hours": 6,
+            "min_rr_ratio": 2.0,
+            "atr_sl_buffer_multiplier": 0.5,
+            "entry_zone_m15_atr_width": 0.25,
+            "require_macro_bias_alignment": True,
+            "blocked_regimes_by_symbol": {},
+            "symbol_overrides": {},
+            "recent_mutations": []
+        }
+        if os.path.exists(self.filters_path):
+            try:
+                with open(self.filters_path, "r") as f:
+                    data = json.load(f)
+            except Exception:
+                pass
+
+        data["updated_at"] = datetime.now(timezone.utc).isoformat()
+        overrides = data.setdefault("symbol_overrides", {})
+        sym_cfg = overrides.setdefault(symbol, {})
+
+        rec_candles = int(review.get("recommended_min_sweep_candles", 2))
+        rec_rr = float(review.get("recommended_min_rr", 2.0))
+
+        if outcome == "LOSS":
+            sym_cfg["min_sweep_confirmation_candles"] = max(2, min(4, rec_candles))
+            sym_cfg["min_rr_ratio"] = round(max(2.0, min(3.5, rec_rr)), 2)
+            # Enforce blocking Brownian chop per symbol on any loss
+            blocked = data.setdefault("blocked_regimes_by_symbol", {})
+            sym_blocked = blocked.setdefault(symbol, [])
+            if "RANDOM_WALK_CHOP" not in sym_blocked:
+                sym_blocked.append("RANDOM_WALK_CHOP")
+
+        mutations = data.setdefault("recent_mutations", [])
+        mutations.insert(0, {
+            "timestamp": data["updated_at"],
+            "trade_id": trade_id,
+            "symbol": symbol,
+            "outcome": outcome,
+            "rule": review.get("actionable_rule_mutation", "")
+        })
+        data["recent_mutations"] = mutations[:15]
+
+        with open(self.filters_path, "w") as f:
+            json.dump(data, f, indent=2)
+
+    def _mutate_weights(
+        self,
+        symbol: str,
+        strategy: str,
+        outcome: str,
+        r_multiple: float,
+        suggested_deltas: Optional[Dict[str, float]] = None
+    ):
         if not os.path.exists(self.weights_path):
             return
 
@@ -115,6 +190,7 @@ class PostMortemManager:
 
             instruments = data.setdefault("instruments", {})
             sym_dict = instruments.setdefault(symbol, {})
+            all_strats = ["SMC_ICT", "SUPPLY_DEMAND", "PRICE_ACTION_AUCTION"]
 
             for regime in ["DIRECTIONAL_TREND", "ROTATIONAL_RANGE", "HIGH_VOLATILITY_EXPANSION"]:
                 regime_data = sym_dict.setdefault(regime, {
@@ -126,20 +202,23 @@ class PostMortemManager:
                     "sample_size": 10
                 })
 
-                alpha = 0.05
-                current_w = regime_data.get(strategy, 0.33)
-                delta = alpha if outcome == "WIN" else (-alpha)
+                # Outcome anchor ensures win increases primary weight & loss trims it
+                outcome_alpha = 0.05 if outcome == "WIN" else -0.05
+                for s_name in all_strats:
+                    cur_w = regime_data.get(s_name, 0.33)
+                    ai_delta = float((suggested_deltas or {}).get(s_name, 0.0))
+                    # Clamp AI delta safely to [-0.05, +0.05]
+                    ai_delta = max(-0.05, min(0.05, ai_delta))
+                    eff_delta = (outcome_alpha if s_name == strategy else 0.0) + (ai_delta * 0.5)
+                    regime_data[s_name] = round(max(0.10, min(0.70, cur_w + eff_delta)), 3)
 
-                new_w = max(0.10, min(0.70, current_w + delta))
-                regime_data[strategy] = round(new_w, 3)
-
-                all_strats = ["SMC_ICT", "SUPPLY_DEMAND", "PRICE_ACTION_AUCTION"]
                 total_w = sum(regime_data.get(s, 0.33) for s in all_strats)
                 for s in all_strats:
                     regime_data[s] = round(regime_data.get(s, 0.33) / total_w, 3)
 
                 regime_data["sample_size"] = regime_data.get("sample_size", 0) + 1
 
+            data["last_updated"] = datetime.now(timezone.utc).isoformat()
             with open(self.weights_path, "w") as f:
                 json.dump(data, f, indent=2)
 

@@ -1,15 +1,16 @@
 """
 Paper Trading Simulator & Execution Engine with Multi-Timeframe Visual Journaling.
 Manages:
+- Strict small-account ($100) viability gate before order submission
+- 6-hour Pending Order TTL & pre-entry structural SL invalidation auto-expiry (EXPIRED_STALE)
 - Entry fills, Break-Even ratcheting (+1.0R), TP/SL exits
 - Automatic BEFORE & AFTER multi-timeframe (H4, H1, M15) screenshot capture
-- Fund telemetry: total_fund, used_fund, net_pnl, after_trade_fund, vault_locked_after
-- Separate routing to profitable_trades (net_pnl > 0) vs losing_trades (net_pnl <= 0)
+- Unified sync across active_trades, paper_trades, profitable_trades, and losing_trades
 """
 
 import os
 import json
-import uuid
+import logging
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 import pandas as pd
@@ -17,8 +18,11 @@ import pandas as pd
 from src.database.db_manager import DatabaseManager
 from src.risk.bankroll_manager import BankrollManager
 from src.risk.pip_calculator import PipCalculator
+from src.risk.position_sizer import PositionSizer
 from src.browser.screenshot_manager import ScreenshotManager
 from src.technicals.confluence_engine import TradingTip
+
+logger = logging.getLogger(__name__)
 
 
 class PaperTrader:
@@ -28,13 +32,26 @@ class PaperTrader:
         bankroll: BankrollManager,
         pip_calc: Optional[PipCalculator] = None,
         screenshot_mgr: Optional[ScreenshotManager] = None,
-        scraper: Any = None
+        scraper: Any = None,
+        position_sizer: Optional[PositionSizer] = None,
+        filters_path: str = "config/active_filters.json",
     ):
         self.db = db
         self.bankroll = bankroll
         self.pip_calc = pip_calc or PipCalculator()
+        self.position_sizer = position_sizer or PositionSizer(self.pip_calc)
         self.screenshot_mgr = screenshot_mgr or ScreenshotManager()
         self.scraper = scraper
+        self.filters_path = filters_path
+
+    def _get_max_pending_hours(self) -> float:
+        if self.filters_path and os.path.exists(self.filters_path):
+            try:
+                with open(self.filters_path, "r") as f:
+                    return float(json.load(f).get("max_pending_hours", 6))
+            except Exception:
+                pass
+        return 6.0
 
     def submit_tip(
         self,
@@ -45,8 +62,8 @@ class PaperTrader:
         scraper: Any = None
     ) -> Optional[str]:
         """
-        Opens a new trade, captures BEFORE screenshots across H4, H1, and M15,
-        and records fund telemetry in active_trades.
+        Validates instrument viability for active equity before opening a paper order,
+        captures BEFORE screenshots across H4/H1/M15, and records fund telemetry.
         """
         if tip.direction == "NEUTRAL_NO_TRADE":
             return None
@@ -55,8 +72,20 @@ class PaperTrader:
         b_status = self.bankroll.get_status()
         epoch_num = b_status["epoch_number"]
         total_fund = b_status["active_bankroll"]
-        used_fund = round(margin_req + dollar_risk, 2)
+        entry_ref = tip.entry_max if tip.direction == "BULLISH" else tip.entry_min
 
+        # Strict Small-Account Viability Gate inside paper execution
+        is_viable, reject_reason = self.position_sizer.is_viable_for_account(
+            symbol=tip.symbol,
+            account_equity=total_fund,
+            entry_price=entry_ref,
+            stop_loss_price=tip.stop_loss,
+        )
+        if not is_viable:
+            logger.warning(f"PaperTrader blocked order on {tip.symbol}: {reject_reason}")
+            return None
+
+        used_fund = round(margin_req + dollar_risk, 2)
         trade_id = f"TRD-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{tip.symbol[:4]}"
         now = datetime.now(timezone.utc).isoformat()
 
@@ -68,13 +97,14 @@ class PaperTrader:
                     trade_id=trade_id,
                     symbol=tip.symbol,
                     stage="BEFORE",
-                    entry_price=tip.entry_max if tip.direction == "BULLISH" else tip.entry_min,
+                    entry_price=entry_ref,
                     sl_price=tip.stop_loss,
                     tp_price=tip.take_profit_1,
                     scraper=active_scraper,
                     timeframes=["H4", "H1", "M15"]
                 )
-            except Exception:
+            except Exception as e:
+                logger.warning(f"BEFORE screenshot capture failed for {trade_id}: {e}")
                 before_screens = {}
 
         # 5W Breakdown
@@ -109,10 +139,8 @@ class PaperTrader:
             "opened_at": now
         }
 
-        # Insert into active_trades
         self.db.record_active_trade(trade_record)
 
-        # Backward-compatibility insert into paper_trades
         with self.db.get_connection() as conn:
             conn.execute("""
             INSERT INTO paper_trades (
@@ -133,14 +161,15 @@ class PaperTrader:
 
     def update_open_positions(self, symbol: str, current_df: pd.DataFrame, scraper: Any = None) -> List[Dict[str, Any]]:
         """
-        Checks intrabar price paths for active trades on this symbol:
-        - Fills pending entries
+        Evaluates active trades for `symbol`:
+        - Cancels PENDING_ENTRY orders older than max_pending_hours (6h TTL) or invalidated pre-entry
+        - Fills valid pending entries cleanly
         - Ratchets SL to Break-Even at +1.0R
-        - On TP or SL: captures AFTER screenshots (H4, H1, M15), routes to profitable_trades
-          or losing_trades, sweeps 50% to Vault if milestone reached, and exports ledgers.
+        - Resolves TP/SL hits, captures AFTER charts, updates Vault & split profit/loss tables
         """
         active_scraper = scraper or self.scraper
-        resolved_trades = []
+        resolved_trades: List[Dict[str, Any]] = []
+        max_pending_hours = self._get_max_pending_hours()
 
         with self.db.get_connection() as conn:
             cursor = conn.cursor()
@@ -154,6 +183,7 @@ class PaperTrader:
             return resolved_trades
 
         recent_candles = current_df.tail(15)
+        now_utc = datetime.now(timezone.utc)
 
         for trade in trades:
             t_id = trade["trade_id"]
@@ -166,12 +196,54 @@ class PaperTrader:
             entry_max = trade["entry_max"]
             status = trade["status"]
 
-            for _, candle in recent_candles.iterrows():
-                c_high = candle["high"]
-                c_low = candle["low"]
+            # Pre-loop TTL expiry check for stale PENDING_ENTRY orders
+            if status == "PENDING_ENTRY":
+                try:
+                    opened_dt = datetime.fromisoformat(trade["opened_at"])
+                    if opened_dt.tzinfo is None:
+                        opened_dt = opened_dt.replace(tzinfo=timezone.utc)
+                    age_hours = (now_utc - opened_dt).total_seconds() / 3600.0
+                    if age_hours >= max_pending_hours:
+                        reason = f"EXPIRED_STALE ({age_hours:.1f}h >= {max_pending_hours:.0f}h TTL)"
+                        self.db.mark_trade_expired(t_id, reason=reason)
+                        logger.info(f"Expired stale pending order {t_id} on {symbol}: {reason}")
+                        resolved_trades.append({
+                            "trade_id": t_id,
+                            "symbol": symbol,
+                            "outcome": "EXPIRED_STALE",
+                            "reason": reason,
+                            "realized_pnl": 0.0,
+                            "realized_r": 0.0,
+                        })
+                        continue
+                except Exception:
+                    pass
 
-                # 1. Check entry fill
+            for _, candle in recent_candles.iterrows():
+                c_high = float(candle["high"])
+                c_low = float(candle["low"])
+
+                # 1. Check Pre-Entry Structural SL Invalidation BEFORE Entry Fill
                 if status == "PENDING_ENTRY":
+                    pre_invalidated = (
+                        (direction == "BULLISH" and c_low <= orig_sl)
+                        or (direction == "BEARISH" and c_high >= orig_sl)
+                    )
+                    if pre_invalidated:
+                        reason = f"EXPIRED_STALE (pre-entry SL invalidation {orig_sl:.2f} breached)"
+                        self.db.mark_trade_expired(t_id, reason=reason)
+                        logger.info(f"Cancelled invalidated pending order {t_id} on {symbol}: {reason}")
+                        resolved_trades.append({
+                            "trade_id": t_id,
+                            "symbol": symbol,
+                            "outcome": "EXPIRED_STALE",
+                            "reason": reason,
+                            "realized_pnl": 0.0,
+                            "realized_r": 0.0,
+                        })
+                        break
+
+                    # Check entry zone fill
                     if c_low <= entry_max and c_high >= entry_min:
                         status = "OPEN"
                         fill_p = (entry_min + entry_max) / 2.0
@@ -213,7 +285,7 @@ class PaperTrader:
                     elif c_low <= curr_sl:
                         hit_sl = True
                         exit_price = curr_sl
-                else: # BEARISH
+                else:
                     if c_low <= tp_price:
                         hit_tp = True
                         exit_price = tp_price
@@ -226,15 +298,13 @@ class PaperTrader:
                     r_mult = round((exit_price - fill_price) / sl_dist if direction == "BULLISH" else (fill_price - exit_price) / sl_dist, 2)
                     now_iso = datetime.now(timezone.utc).isoformat()
 
-                    # Process bankroll & Profit Vault
-                    bankroll_evt = self.bankroll.process_trade_result(dollar_pnl, r_mult, symbol)
+                    self.bankroll.process_trade_result(dollar_pnl, r_mult, symbol)
                     b_status = self.bankroll.get_status()
 
                     total_fund = trade["total_fund"]
                     after_fund = round(total_fund + dollar_pnl, 2)
                     vault_after = b_status["vault_balance"]
 
-                    # Capture AFTER screenshots across H4, H1, M15
                     after_screens = {}
                     if active_scraper:
                         try:
@@ -249,14 +319,15 @@ class PaperTrader:
                                 timeframes=["H4", "H1", "M15"],
                                 pnl=dollar_pnl
                             )
-                        except Exception:
+                        except Exception as e:
+                            logger.warning(f"AFTER screenshot capture failed for {t_id}: {e}")
                             after_screens = {}
 
-                    # Calculate hold duration
                     opened_dt = datetime.fromisoformat(trade["opened_at"])
+                    if opened_dt.tzinfo is None:
+                        opened_dt = opened_dt.replace(tzinfo=timezone.utc)
                     hold_hours = round(max(0.5, (datetime.now(timezone.utc) - opened_dt).total_seconds() / 3600.0), 1)
 
-                    # Routing to profitable_trades or losing_trades
                     closed_dict = {
                         "trade_id": t_id,
                         "epoch_id": trade["epoch_id"],
@@ -282,7 +353,7 @@ class PaperTrader:
                         "w3_when": f"Open: {trade['opened_at']} | Close: {now_iso} | Hold: {hold_hours}h",
                         "w4_where": trade.get("w4_where", "H4/H1 Zone"),
                         "w5_why": f"Exit triggered by {'Take Profit' if hit_tp else 'Stop Loss'}",
-                        "what_improved": "Bayesian expectation updated; Monte Carlo simulated",
+                        "what_improved": "Bayesian expectation updated; active filters refined",
                         "before_screenshots": json.loads(trade.get("before_screenshots_json") or "{}"),
                         "after_screenshots": after_screens,
                         "opened_at": trade["opened_at"],
@@ -291,6 +362,15 @@ class PaperTrader:
                     }
 
                     target_table = self.db.record_closed_trade(closed_dict)
+                    self.db.sync_paper_trade_closure(
+                        symbol=symbol,
+                        outcome_status="CLOSED_WIN" if dollar_pnl > 0 else "CLOSED_LOSS",
+                        exit_price=exit_price,
+                        net_pnl=dollar_pnl,
+                        realized_r=r_mult,
+                        hold_hours=hold_hours,
+                        closed_at=now_iso,
+                    )
 
                     resolved_trades.append({
                         "trade_id": t_id,

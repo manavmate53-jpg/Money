@@ -21,7 +21,14 @@ class PipCalculator:
                 return data.get("instruments", {})
         return {}
 
+    SYMBOL_ALIASES = {
+        "STPRNG": "STEPINDEX",
+    }
+
     def get_spec(self, symbol: str) -> Dict[str, Any]:
+        resolved = self.SYMBOL_ALIASES.get(symbol.upper(), symbol)
+        if resolved in self.specs:
+            return self.specs[resolved]
         if symbol in self.specs:
             return self.specs[symbol]
         # Safe default spec if unknown symbol
