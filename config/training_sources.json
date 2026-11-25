@@ -1,0 +1,18 @@
+{
+  "version": "1.0.0",
+  "primary_mentor": "PrimeFX",
+  "channel_urls": [
+    "https://www.youtube.com/@Prime_fx/videos",
+    "https://www.youtube.com/@ICTPRIMEFX/videos",
+    "https://www.youtube.com/@PrimeFXInsights/videos"
+  ],
+  "fallback_search_query": "PrimeFx Deriv V75 Jump Index ICT",
+  "sort_order": "chronological_oldest_to_latest",
+  "outputs": {
+    "catalog_path": "knowledge_base/primefx_video_catalog.json",
+    "curriculum_report_path": "reports/PRIMEFX_VIDEO_CURRICULUM.md",
+    "master_playbook_json": "knowledge_base/primefx_master_playbook.json",
+    "logic_and_flaws_md": "knowledge_base/PRIMEFX_LOGIC_AND_FLAWS.md",
+    "transcripts_cache_dir": "knowledge_base/primefx_transcripts"
+  }
+}

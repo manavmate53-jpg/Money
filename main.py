@@ -37,6 +37,8 @@ from src.technicals.confluence_engine import ConfluenceEngine
 from src.technicals.smc_ict import SmcIctEngine
 from src.technicals.supply_demand import SupplyDemandEngine
 from src.technicals.price_action import PriceActionEngine
+from src.technicals.liquidity_engine import LiquidityEngine
+from src.technicals.poi_price_action import PoiPriceActionEngine
 from src.browser.deriv_scraper import DerivScraper
 from src.browser.ws_interceptor import DerivWsInterceptor
 from src.simulator.paper_trader import PaperTrader
@@ -93,7 +95,7 @@ def cycle_hourly(dry_run: bool = False, capital: float = 100.0) -> dict:
         except Exception:
             macro_data = {}
 
-    symbols = ["STEPINDEX", "1HZ25V", "1HZ50V", "1HZ10V", "1HZ75V", "R_75"]
+    symbols = ["STEPINDEX", "JD75", "JD100", "1HZ25V", "1HZ50V", "1HZ10V", "1HZ75V", "R_75"]
     results = {"resolved_trades": 0, "expired_trades": 0, "new_trades": 0}
 
     # First check any lingering active_trades even on symbols outside primary scan loop
@@ -116,9 +118,8 @@ def cycle_hourly(dry_run: bool = False, capital: float = 100.0) -> dict:
     for sym in symbols:
         df_h1 = ws.get_candles(sym, timeframe="H1", count=150)
         df_m15 = ws.get_candles(sym, timeframe="M15", count=150)
+        df_h4 = ws.get_candles(sym, timeframe="H4", count=100)
 
-        # Capture visual only if there are active positions on this symbol (saves CI time)
-        active_on_sym = [t for t in db.get_active_trades() if t["symbol"] == sym]
         resolved = paper_trader.update_open_positions(sym, df_h1, scraper=scraper)
         for res in resolved:
             if res["outcome"] == "EXPIRED_STALE":
@@ -137,11 +138,19 @@ def cycle_hourly(dry_run: bool = False, capital: float = 100.0) -> dict:
         if any(t["symbol"] == sym for t in db.get_active_trades()):
             continue
 
-        # Check Macro Alignment & Tactical Sniper Entry
+        # Check Macro Alignment, Anti-Revenge Cooldown & Tactical Sniper Entry
         macro_info = macro_data.get(sym, {})
         macro_bias = macro_info.get("macro_bias", "NEUTRAL")
+        hours_since_loss = db.get_hours_since_last_loss(sym)
 
-        tip = confluence.generate_tip(sym, df_h1, m15_df=df_m15, macro_bias=macro_bias)
+        tip = confluence.generate_tip(
+            sym,
+            df_h1,
+            m15_df=df_m15,
+            h4_df=df_h4,
+            macro_bias=macro_bias,
+            hours_since_last_loss=hours_since_loss,
+        )
         if tip.direction != "NEUTRAL_NO_TRADE":
             equity = bankroll.get_status()["active_bankroll"]
             entry_p = tip.entry_max if tip.direction == "BULLISH" else tip.entry_min
@@ -185,10 +194,9 @@ def cycle_hourly(dry_run: bool = False, capital: float = 100.0) -> dict:
 def cycle_macro(symbols_list: list = None) -> dict:
     """
     Cadence 2: Macro & Regime Desk (Every 4 Hours - 0 */4 * * * UTC)
-    - Captures symbol-accurate TradingView H1 PNGs + live OHLCV across all Deriv indices.
-    - Computes SMC, S&D, One-Time Framing, and Value Area metrics.
-    - Screens all instruments via gemini-2.5-flash with 1.5s inter-symbol pacing and executes
-      top-setup multimodal review for authoritative config/macro_bias.json.
+    - Captures symbol-accurate TradingView H1 PNGs + live OHLCV across VIX, Step & Jump Indices.
+    - Computes Pure Price Action, PrimeFX Liquidity Pools (EQH/EQL/PDH/PDL), and H4/H1 POIs.
+    - Screens instruments via Gemini Multimodal Vision to publish config/macro_bias.json.
     """
     console.print("[bold magenta]══════ MACRO & REGIME DESK (4-HOUR CYCLE) ══════[/bold magenta]")
     load_environment()
@@ -196,50 +204,68 @@ def cycle_macro(symbols_list: list = None) -> dict:
     scraper = DerivScraper()
     council = GeminiCouncil()
     smc = SmcIctEngine()
-    sd = SupplyDemandEngine()
     pa = PriceActionEngine()
+    liq_engine = LiquidityEngine()
+    poi_engine = PoiPriceActionEngine()
 
-    symbols = symbols_list or ["STEPINDEX", "1HZ25V", "1HZ50V", "1HZ75V", "1HZ10V", "R_75", "R_100", "BOOM1000", "CRASH1000"]
+    symbols = symbols_list or [
+        "STEPINDEX", "JD75", "JD100", "1HZ25V", "1HZ50V", "1HZ75V",
+        "1HZ10V", "1HZ100V", "JD10", "JD25", "JD50", "R_75", "R_100", "BOOM1000", "CRASH1000"
+    ]
     macro_map = {
         "updated_at": datetime.now(timezone.utc).isoformat(),
-        "generated_by": "Macro & Regime Desk (Gemini Multimodal Vision + Live Deriv WS Telemetry)",
+        "generated_by": "Macro & Regime Desk (Gemini Multimodal Vision + PrimeFX Pure Liquidity/POI Telemetry)",
         "instruments": {}
     }
 
     for idx, sym in enumerate(symbols):
         if idx > 0:
-            time.sleep(1.5)  # Respect RPM pacing across full-desk scans
+            time.sleep(1.5)
 
         console.print(f"[cyan]Scanning Macro Structure for {sym}...[/cyan]")
         h1_data = scraper.capture_chart(sym, timeframe="H1", headless=True)
         df_h1 = h1_data["candles_df"]
+        df_h4 = scraper.ws_interceptor.get_candles(sym, timeframe="H4", count=100)
         screenshot = h1_data["screenshot_path"]
 
         smc_res = smc.analyze(df_h1)
-        sd_res = sd.analyze(df_h1)
         pa_res = pa.analyze(df_h1)
+        liq_res = liq_engine.analyze(df_h1, df_h4=df_h4)
+        poi_res = poi_engine.analyze(df_h1, df_h4=df_h4)
 
         summary = {
             "current_price": float(df_h1["close"].iloc[-1]),
             "ws_source": scraper.ws_interceptor.last_source,
             "chart_verified_symbol": h1_data.get("verified_symbol_match", False),
+            "is_jump_index": sym.startswith("JD"),
             "smc_ict": smc_res,
-            "supply_demand": {
-                "fresh_demand_count": len(sd_res["fresh_demand_zones"]),
-                "fresh_supply_count": len(sd_res["fresh_supply_zones"])
+            "liquidity_pools": {
+                "pdh": liq_res["pools"]["pdh"],
+                "pdl": liq_res["pools"]["pdl"],
+                "p4hh": liq_res["pools"]["p4hh"],
+                "p4hl": liq_res["pools"]["p4hl"],
+                "eqh_count": len(liq_res["pools"]["eqh"]),
+                "eql_count": len(liq_res["pools"]["eql"]),
+                "active_sweeps": liq_res["active_sweeps"][:3],
+            },
+            "poi_summary": {
+                "valid_pois_count": len(poi_res["valid_pois"]),
+                "trap_pois_count": len(poi_res["trap_pois"]),
+                "best_bullish_poi": poi_res.get("best_bullish_poi"),
+                "best_bearish_poi": poi_res.get("best_bearish_poi"),
             },
             "price_action": {
                 "regime": pa_res["regime"],
                 "one_time_framing": pa_res["one_time_framing"]["status"],
-                "value_area": pa_res["value_area"],
+                "dealing_range": pa_res["dealing_range"],
+                "sr_polarity_flips": pa_res["sr_polarity_flips"],
                 "atr_14": pa_res["atr_14"]
             }
         }
 
-        # Per-symbol screening via fast gemini-2.5-flash with multimodal vision attached
         eval_res = council.evaluate_macro_regime(sym, summary, image_path=screenshot, model_name="gemini-2.5-flash")
         eval_res["display_name"] = sym
-        eval_res["nano_lot_viable"] = sym in ("STEPINDEX", "1HZ25V", "1HZ50V", "1HZ10V")
+        eval_res["nano_lot_viable"] = sym in ("STEPINDEX", "JD75", "JD100", "1HZ25V", "1HZ50V", "1HZ10V")
         macro_map["instruments"][sym] = eval_res
 
         b_color = "green" if eval_res["macro_bias"] == "BULLISH" else ("red" if eval_res["macro_bias"] == "BEARISH" else "yellow")
@@ -350,7 +376,7 @@ def cmd_advise(capital: float = 100.0):
 [bold white]Instrument:[/bold white] [bold yellow]{rec_sym}[/bold yellow] (Ranked #1 for ${capital:.0f} Capital)
 [bold white]Directional Bias:[/bold white] [bold {dir_color}]{direction}[/bold {dir_color}]
 [bold white]Strategy Attribution:[/bold white] {result['primary_strategy']} ({result['market_regime']})
-[bold white]Champion Rule Alignment:[/bold white] {escape(rule or 'Auction Value Area Absorption')}
+[bold white]Champion Rule Alignment:[/bold white] {escape(rule or 'PrimeFX Pure Price-Action + Liquidity Playbook')}
 
 [bold cyan]3. EXACT EXECUTION NUMBERS[/bold cyan]
 • [bold white]Recommended Lot Size:[/bold white] [bold green]{lot} lots[/bold green] (Exact Dollar Risk: [bold red]${risk:.2f}[/bold red] / {risk_pct}%)

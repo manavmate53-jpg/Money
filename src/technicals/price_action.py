@@ -1,15 +1,15 @@
 """
-Price Action & Auction Market Theory Engine.
+Pure Price Action & Candle Structure Engine (Zero Orderflow / Zero Volume Profile).
 Implements:
 - Strict One-Time Framing Rule (Emir Gams: HH+HL+HC or LL+LH+LC)
-- Value Area Calculation: VAH (85th%), VAL (15th%), POC (mode) from Auction Market Theory (James Dalton / Fabio Valentini)
-- Support/Resistance polarity flips
-- Range High/Low deviations (fakeouts/springs)
-- Candlestick triggers (Pin Bar, Engulfing, Inside Bar)
-- ATR/ADX regime classification (DIRECTIONAL_TREND, ROTATIONAL_RANGE, HIGH_VOLATILITY_EXPANSION)
+- Support/Resistance Polarity Flips (Break & Retest levels from pure OHLC pivots)
+- Pure Range 50% Equilibrium & Dealing Range bounds
+- Candlestick Rejection Triggers (Pin Bar, Engulfing, Inside Bar Breakout)
+- ATR/ADX/Hurst Regime Classification (DIRECTIONAL_TREND, ROTATIONAL_RANGE,
+  RANDOM_WALK_CHOP, HIGH_VOLATILITY_EXPANSION)
 """
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 import pandas as pd
 import numpy as np
 
@@ -27,7 +27,7 @@ class PriceActionEngine:
         return tr.rolling(window=self.atr_period, min_periods=1).mean()
 
     def calculate_adx(self, df: pd.DataFrame) -> pd.Series:
-        """Computes Wilder's ADX for regime filtering."""
+        """Computes Wilder's ADX for trend strength & regime filtering."""
         high = df["high"]
         low = df["low"]
         close = df["close"]
@@ -64,13 +64,11 @@ class PriceActionEngine:
         bearish_otf = True
 
         for i in range(1, len(recent)):
-            # Bullish check: HH, HL, HC
             if not (recent.loc[i, "high"] > recent.loc[i - 1, "high"] and
                     recent.loc[i, "low"] > recent.loc[i - 1, "low"] and
                     recent.loc[i, "close"] > recent.loc[i - 1, "close"]):
                 bullish_otf = False
 
-            # Bearish check: LL, LH, LC
             if not (recent.loc[i, "low"] < recent.loc[i - 1, "low"] and
                     recent.loc[i, "high"] < recent.loc[i - 1, "high"] and
                     recent.loc[i, "close"] < recent.loc[i - 1, "close"]):
@@ -82,33 +80,57 @@ class PriceActionEngine:
             return {"status": "BEARISH_ONE_TIME_FRAMING", "bars_count": bars_back}
         return {"status": "ROTATIONAL_NO_OTF", "bars_count": 0}
 
-    def compute_value_area(self, df: pd.DataFrame, lookback: int = 40) -> Dict[str, float]:
+    def compute_dealing_range(self, df: pd.DataFrame, lookback: int = 40) -> Dict[str, float]:
         """
-        Computes Auction Market Theory Value Area:
-        - VAH: 85th percentile of distribution
-        - VAL: 15th percentile of distribution
-        - POC: Median / Point of Control
+        Pure Price-Action Dealing Range & 50% Equilibrium (replaces volume-based Value Area).
         """
         recent = df.iloc[-lookback:]
-        # Use high, low, close weighted sample
-        prices = np.concatenate([recent["high"].values, recent["low"].values, recent["close"].values])
-        vah = float(np.percentile(prices, 85))
-        val = float(np.percentile(prices, 15))
-        poc = float(np.median(prices))
-
+        range_high = float(recent["high"].max())
+        range_low = float(recent["low"].min())
+        equilibrium = (range_high + range_low) / 2.0
         return {
-            "vah": round(vah, 4),
-            "val": round(val, 4),
-            "poc": round(poc, 4),
-            "range_width": round(vah - val, 4)
+            "range_high": round(range_high, 4),
+            "range_low": round(range_low, 4),
+            "equilibrium": round(equilibrium, 4),
+            "range_width": round(range_high - range_low, 4),
         }
+
+    def detect_sr_polarity_flips(self, df: pd.DataFrame, lookback: int = 50) -> Dict[str, Any]:
+        """
+        Detects pure OHLC Support-to-Resistance and Resistance-to-Support polarity flips.
+        """
+        if len(df) < 15:
+            return {"bullish_flip": None, "bearish_flip": None}
+
+        recent = df.iloc[-lookback:].reset_index(drop=True)
+        curr_close = float(recent["close"].iloc[-1])
+        atr_val = float(self.calculate_atr(recent).iloc[-1]) or 1.0
+
+        bullish_flip = None
+        bearish_flip = None
+
+        # Check swing pivots broken with close and currently near retest zone
+        for i in range(2, len(recent) - 5):
+            sh = float(recent.loc[i, "high"])
+            if sh >= float(recent.loc[i - 1, "high"]) and sh >= float(recent.loc[i + 1, "high"]):
+                broke_above = any(float(recent.loc[k, "close"]) > sh for k in range(i + 2, len(recent) - 1))
+                if broke_above and curr_close >= sh - (0.3 * atr_val) and curr_close <= sh + (1.2 * atr_val):
+                    bullish_flip = round(sh, 4)
+
+            sl = float(recent.loc[i, "low"])
+            if sl <= float(recent.loc[i - 1, "low"]) and sl <= float(recent.loc[i + 1, "low"]):
+                broke_below = any(float(recent.loc[k, "close"]) < sl for k in range(i + 2, len(recent) - 1))
+                if broke_below and curr_close <= sl + (0.3 * atr_val) and curr_close >= sl - (1.2 * atr_val):
+                    bearish_flip = round(sl, 4)
+
+        return {"bullish_flip": bullish_flip, "bearish_flip": bearish_flip}
 
     def classify_market_regime(self, df: pd.DataFrame) -> str:
         """
-        Classifies regime into:
+        Classifies pure price regime into:
         - DIRECTIONAL_TREND (Hurst > 0.55 or ADX >= 25 or One-Time Framing)
-        - ROTATIONAL_RANGE (Hurst < 0.45 or Value Area oscillation)
-        - RANDOM_WALK_CHOP (0.45 <= Hurst <= 0.55 on low ADX)
+        - ROTATIONAL_RANGE (Hurst < 0.45 or range-bound oscillation)
+        - RANDOM_WALK_CHOP (0.46 <= Hurst <= 0.54 on low ADX)
         - HIGH_VOLATILITY_EXPANSION (ATR > 1.8 * avg ATR)
         """
         from src.risk.quant_engine import QuantEngine
@@ -124,24 +146,17 @@ class PriceActionEngine:
         otf = self.check_one_time_framing(df, bars_back=2)
         hurst = quant.calculate_hurst_exponent(df["close"].tolist())
 
-        # High Volatility Expansion
         if curr_atr > (1.8 * avg_atr):
             return "HIGH_VOLATILITY_EXPANSION"
-
-        # Pure Random Walk Chop
         if 0.46 <= hurst <= 0.54 and curr_adx < 22 and otf["status"] == "ROTATIONAL_NO_OTF":
             return "RANDOM_WALK_CHOP"
-
-        # Directional Trend
         if hurst > 0.55 or curr_adx >= 25 or otf["status"] in ["BULLISH_ONE_TIME_FRAMING", "BEARISH_ONE_TIME_FRAMING"]:
             return "DIRECTIONAL_TREND"
-
-        # Otherwise Rotational
         return "ROTATIONAL_RANGE"
 
     def detect_candlestick_triggers(self, df: pd.DataFrame) -> Dict[str, Any]:
         """
-        Identifies precision candlestick triggers on the most recent 2 bars:
+        Identifies pure candlestick triggers on the most recent 2 bars:
         - Pin Bar (Hammer / Shooting Star)
         - Bullish / Bearish Engulfing
         - Inside Bar Breakout
@@ -152,29 +167,19 @@ class PriceActionEngine:
         c = df.iloc[-1]
         p = df.iloc[-2]
 
-        body = abs(c["close"] - c["open"])
         candle_range = c["high"] - c["low"]
         upper_wick = c["high"] - max(c["close"], c["open"])
         lower_wick = min(c["close"], c["open"]) - c["low"]
 
-        # Bullish Pin Bar / Hammer (lower wick >= 60% of range, small body)
         if candle_range > 0 and (lower_wick / candle_range) >= 0.60:
             return {"pattern": "BULLISH_PIN_BAR", "bias": "BULLISH", "strength": 0.85}
-
-        # Bearish Pin Bar / Shooting Star (upper wick >= 60% of range)
         if candle_range > 0 and (upper_wick / candle_range) >= 0.60:
             return {"pattern": "BEARISH_PIN_BAR", "bias": "BEARISH", "strength": 0.85}
-
-        # Bullish Engulfing
-        if c["close"] > c["open"] and p["close"] < p["open"] and c["close"] > p["open"] and c["open"] < p["close"]:
+        if c["close"] > c["open"] and p["close"] < p["open"] and c["close"] > p["high"] and c["open"] <= p["close"]:
             return {"pattern": "BULLISH_ENGULFING", "bias": "BULLISH", "strength": 0.80}
-
-        # Bearish Engulfing
-        if c["close"] < c["open"] and p["close"] > p["open"] and c["close"] < p["low"] and c["open"] > p["close"]:
+        if c["close"] < c["open"] and p["close"] > p["open"] and c["close"] < p["low"] and c["open"] >= p["close"]:
             return {"pattern": "BEARISH_ENGULFING", "bias": "BEARISH", "strength": 0.80}
-
-        # Inside Bar Breakout
-        if p["high"] > df.iloc[-3]["high"] and p["low"] < df.iloc[-3]["low"]:
+        if p["high"] < df.iloc[-3]["high"] and p["low"] > df.iloc[-3]["low"]:
             if c["close"] > p["high"]:
                 return {"pattern": "INSIDE_BAR_BULLISH_BREAKOUT", "bias": "BULLISH", "strength": 0.75}
             elif c["close"] < p["low"]:
@@ -183,17 +188,19 @@ class PriceActionEngine:
         return {"pattern": "STANDARD_CANDLE", "bias": "NEUTRAL", "strength": 0.50}
 
     def analyze(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Runs full Price Action analysis suite."""
+        """Runs full Pure Price Action analysis suite."""
         regime = self.classify_market_regime(df)
         otf = self.check_one_time_framing(df, bars_back=3)
-        value_area = self.compute_value_area(df)
+        dealing_range = self.compute_dealing_range(df)
+        sr_flips = self.detect_sr_polarity_flips(df)
         trigger = self.detect_candlestick_triggers(df)
         atr_val = float(self.calculate_atr(df).iloc[-1])
 
         return {
             "regime": regime,
             "one_time_framing": otf,
-            "value_area": value_area,
+            "dealing_range": dealing_range,
+            "sr_polarity_flips": sr_flips,
             "candlestick_trigger": trigger,
             "atr_14": round(atr_val, 4)
         }

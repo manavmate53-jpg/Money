@@ -1,144 +1,49 @@
 {
-  "version": "1.0.0",
-  "last_updated": "2026-11-22T00:00:00Z",
+  "version": "2.0.0",
+  "last_updated": "2026-11-25T10:20:00Z",
   "bayesian_alpha_prior": 1.0,
   "bayesian_beta_prior": 1.0,
   "ema_decay_factor": 0.05,
   "default_framework_weights": {
-    "SMC_ICT": 0.4,
-    "SUPPLY_DEMAND": 0.35,
-    "PRICE_ACTION_AUCTION": 0.25
+    "SMC_ICT": 0.45,
+    "SUPPLY_DEMAND": 0.30,
+    "PRICE_ACTION": 0.25
   },
   "instruments": {
+    "STEPINDEX": {
+      "DIRECTIONAL_TREND": {"SMC_ICT": 0.45, "SUPPLY_DEMAND": 0.30, "PRICE_ACTION": 0.25, "win_rate": 0.61, "profit_factor": 1.9, "sample_size": 15},
+      "ROTATIONAL_RANGE": {"SMC_ICT": 0.45, "SUPPLY_DEMAND": 0.30, "PRICE_ACTION": 0.25, "win_rate": 0.59, "profit_factor": 1.78, "sample_size": 13},
+      "HIGH_VOLATILITY_EXPANSION": {"SMC_ICT": 0.50, "SUPPLY_DEMAND": 0.25, "PRICE_ACTION": 0.25, "win_rate": 0.50, "profit_factor": 1.50, "sample_size": 6}
+    },
     "1HZ25V": {
-      "DIRECTIONAL_TREND": {
-        "SMC_ICT": 0.45,
-        "SUPPLY_DEMAND": 0.35,
-        "PRICE_ACTION_AUCTION": 0.2,
-        "win_rate": 0.62,
-        "profit_factor": 2.1,
-        "sample_size": 18
-      },
-      "ROTATIONAL_RANGE": {
-        "SMC_ICT": 0.25,
-        "SUPPLY_DEMAND": 0.45,
-        "PRICE_ACTION_AUCTION": 0.3,
-        "win_rate": 0.58,
-        "profit_factor": 1.85,
-        "sample_size": 14
-      },
-      "HIGH_VOLATILITY_EXPANSION": {
-        "SMC_ICT": 0.5,
-        "SUPPLY_DEMAND": 0.2,
-        "PRICE_ACTION_AUCTION": 0.3,
-        "win_rate": 0.55,
-        "profit_factor": 1.7,
-        "sample_size": 9
-      }
+      "DIRECTIONAL_TREND": {"SMC_ICT": 0.45, "SUPPLY_DEMAND": 0.35, "PRICE_ACTION": 0.20, "win_rate": 0.62, "profit_factor": 2.1, "sample_size": 18},
+      "ROTATIONAL_RANGE": {"SMC_ICT": 0.40, "SUPPLY_DEMAND": 0.35, "PRICE_ACTION": 0.25, "win_rate": 0.58, "profit_factor": 1.85, "sample_size": 14},
+      "HIGH_VOLATILITY_EXPANSION": {"SMC_ICT": 0.50, "SUPPLY_DEMAND": 0.20, "PRICE_ACTION": 0.30, "win_rate": 0.55, "profit_factor": 1.7, "sample_size": 9}
     },
     "1HZ50V": {
-      "DIRECTIONAL_TREND": {
-        "SMC_ICT": 0.42,
-        "SUPPLY_DEMAND": 0.38,
-        "PRICE_ACTION_AUCTION": 0.2,
-        "win_rate": 0.6,
-        "profit_factor": 1.95,
-        "sample_size": 16
-      },
-      "ROTATIONAL_RANGE": {
-        "SMC_ICT": 0.3,
-        "SUPPLY_DEMAND": 0.4,
-        "PRICE_ACTION_AUCTION": 0.3,
-        "win_rate": 0.54,
-        "profit_factor": 1.65,
-        "sample_size": 12
-      },
-      "HIGH_VOLATILITY_EXPANSION": {
-        "SMC_ICT": 0.48,
-        "SUPPLY_DEMAND": 0.22,
-        "PRICE_ACTION_AUCTION": 0.3,
-        "win_rate": 0.52,
-        "profit_factor": 1.6,
-        "sample_size": 8
-      }
+      "DIRECTIONAL_TREND": {"SMC_ICT": 0.42, "SUPPLY_DEMAND": 0.38, "PRICE_ACTION": 0.20, "win_rate": 0.60, "profit_factor": 1.95, "sample_size": 16},
+      "ROTATIONAL_RANGE": {"SMC_ICT": 0.38, "SUPPLY_DEMAND": 0.37, "PRICE_ACTION": 0.25, "win_rate": 0.54, "profit_factor": 1.65, "sample_size": 12},
+      "HIGH_VOLATILITY_EXPANSION": {"SMC_ICT": 0.48, "SUPPLY_DEMAND": 0.22, "PRICE_ACTION": 0.30, "win_rate": 0.52, "profit_factor": 1.60, "sample_size": 8}
     },
     "1HZ75V": {
-      "DIRECTIONAL_TREND": {
-        "SMC_ICT": 0.421,
-        "SUPPLY_DEMAND": 0.368,
-        "PRICE_ACTION_AUCTION": 0.211,
-        "win_rate": 0.58,
-        "profit_factor": 1.8,
-        "sample_size": 13
-      },
-      "ROTATIONAL_RANGE": {
-        "SMC_ICT": 0.211,
-        "SUPPLY_DEMAND": 0.474,
-        "PRICE_ACTION_AUCTION": 0.316,
-        "win_rate": 0.5,
-        "profit_factor": 1.45,
-        "sample_size": 11
-      },
-      "HIGH_VOLATILITY_EXPANSION": {
-        "SMC_ICT": 0.526,
-        "SUPPLY_DEMAND": 0.211,
-        "PRICE_ACTION_AUCTION": 0.263,
-        "win_rate": 0.53,
-        "profit_factor": 1.65,
-        "sample_size": 8
-      }
+      "DIRECTIONAL_TREND": {"SMC_ICT": 0.42, "SUPPLY_DEMAND": 0.36, "PRICE_ACTION": 0.22, "win_rate": 0.55, "profit_factor": 1.70, "sample_size": 14},
+      "ROTATIONAL_RANGE": {"SMC_ICT": 0.35, "SUPPLY_DEMAND": 0.35, "PRICE_ACTION": 0.30, "win_rate": 0.50, "profit_factor": 1.45, "sample_size": 11},
+      "HIGH_VOLATILITY_EXPANSION": {"SMC_ICT": 0.50, "SUPPLY_DEMAND": 0.22, "PRICE_ACTION": 0.28, "win_rate": 0.53, "profit_factor": 1.65, "sample_size": 8}
     },
-    "STEPINDEX": {
-      "DIRECTIONAL_TREND": {
-        "SMC_ICT": 0.35,
-        "SUPPLY_DEMAND": 0.35,
-        "PRICE_ACTION_AUCTION": 0.3,
-        "win_rate": 0.61,
-        "profit_factor": 1.9,
-        "sample_size": 15
-      },
-      "ROTATIONAL_RANGE": {
-        "SMC_ICT": 0.3,
-        "SUPPLY_DEMAND": 0.4,
-        "PRICE_ACTION_AUCTION": 0.3,
-        "win_rate": 0.59,
-        "profit_factor": 1.78,
-        "sample_size": 13
-      },
-      "HIGH_VOLATILITY_EXPANSION": {
-        "SMC_ICT": 0.4,
-        "SUPPLY_DEMAND": 0.3,
-        "PRICE_ACTION_AUCTION": 0.3,
-        "win_rate": 0.5,
-        "profit_factor": 1.5,
-        "sample_size": 6
-      }
+    "JD75": {
+      "DIRECTIONAL_TREND": {"SMC_ICT": 0.50, "SUPPLY_DEMAND": 0.25, "PRICE_ACTION": 0.25, "win_rate": 0.58, "profit_factor": 2.00, "sample_size": 10},
+      "ROTATIONAL_RANGE": {"SMC_ICT": 0.45, "SUPPLY_DEMAND": 0.30, "PRICE_ACTION": 0.25, "win_rate": 0.54, "profit_factor": 1.75, "sample_size": 8},
+      "HIGH_VOLATILITY_EXPANSION": {"SMC_ICT": 0.55, "SUPPLY_DEMAND": 0.20, "PRICE_ACTION": 0.25, "win_rate": 0.52, "profit_factor": 1.65, "sample_size": 6}
+    },
+    "JD100": {
+      "DIRECTIONAL_TREND": {"SMC_ICT": 0.50, "SUPPLY_DEMAND": 0.25, "PRICE_ACTION": 0.25, "win_rate": 0.57, "profit_factor": 1.95, "sample_size": 10},
+      "ROTATIONAL_RANGE": {"SMC_ICT": 0.45, "SUPPLY_DEMAND": 0.30, "PRICE_ACTION": 0.25, "win_rate": 0.53, "profit_factor": 1.70, "sample_size": 8},
+      "HIGH_VOLATILITY_EXPANSION": {"SMC_ICT": 0.55, "SUPPLY_DEMAND": 0.20, "PRICE_ACTION": 0.25, "win_rate": 0.51, "profit_factor": 1.60, "sample_size": 6}
     },
     "R_75": {
-      "DIRECTIONAL_TREND": {
-        "SMC_ICT": 0.45,
-        "SUPPLY_DEMAND": 0.35,
-        "PRICE_ACTION_AUCTION": 0.2,
-        "win_rate": 0.52,
-        "profit_factor": 1.4,
-        "sample_size": 10
-      },
-      "ROTATIONAL_RANGE": {
-        "SMC_ICT": 0.25,
-        "SUPPLY_DEMAND": 0.45,
-        "PRICE_ACTION_AUCTION": 0.3,
-        "win_rate": 0.48,
-        "profit_factor": 1.25,
-        "sample_size": 8
-      },
-      "HIGH_VOLATILITY_EXPANSION": {
-        "SMC_ICT": 0.5,
-        "SUPPLY_DEMAND": 0.25,
-        "PRICE_ACTION_AUCTION": 0.25,
-        "win_rate": 0.45,
-        "profit_factor": 1.15,
-        "sample_size": 6
-      }
+      "DIRECTIONAL_TREND": {"SMC_ICT": 0.45, "SUPPLY_DEMAND": 0.35, "PRICE_ACTION": 0.20, "win_rate": 0.52, "profit_factor": 1.40, "sample_size": 10},
+      "ROTATIONAL_RANGE": {"SMC_ICT": 0.35, "SUPPLY_DEMAND": 0.35, "PRICE_ACTION": 0.30, "win_rate": 0.48, "profit_factor": 1.25, "sample_size": 8},
+      "HIGH_VOLATILITY_EXPANSION": {"SMC_ICT": 0.50, "SUPPLY_DEMAND": 0.25, "PRICE_ACTION": 0.25, "win_rate": 0.45, "profit_factor": 1.15, "sample_size": 6}
     }
   }
 }

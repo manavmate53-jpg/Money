@@ -39,6 +39,11 @@ class DerivWsInterceptor:
         "R_100": "R_100",
         "BOOM1000": "BOOM1000",
         "CRASH1000": "CRASH1000",
+        "JD10": "JD10",
+        "JD25": "JD25",
+        "JD50": "JD50",
+        "JD75": "JD75",
+        "JD100": "JD100",
     }
 
     # Timeframe mappings to seconds
@@ -143,6 +148,7 @@ class DerivWsInterceptor:
             "1HZ25V": 2800.0,
             "1HZ50V": 1450.0,
             "1HZ75V": 3330.0,
+            "1HZ100V": 1600.0,
             "R_10": 4835.0,
             "R_25": 2960.0,
             "R_50": 77.3,
@@ -152,6 +158,11 @@ class DerivWsInterceptor:
             "CRASH1000": 5750.0,
             "STEPINDEX": 7358.0,
             "STPRNG": 7358.0,
+            "JD10": 89900.0,
+            "JD25": 126600.0,
+            "JD50": 79100.0,
+            "JD75": 3918.0,
+            "JD100": 47.3,
         }
         start_price = base_prices.get(symbol, 2500.0)
         granularity = self.TIMEFRAME_GRANULARITY.get(timeframe.upper(), 3600)

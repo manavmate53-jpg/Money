@@ -52,7 +52,7 @@ TacticalSniperSchema = TradeValidationSchema
 
 
 class StrategyWeightDelta(BaseModel):
-    strategy_name: str = Field(description="Exact framework name: SMC_ICT, SUPPLY_DEMAND, or PRICE_ACTION_AUCTION")
+    strategy_name: str = Field(description="Exact framework name: SMC_ICT, SUPPLY_DEMAND, or PRICE_ACTION")
     delta: float = Field(description="Suggested Bayesian weight delta between -0.05 and +0.05")
     reason: str = Field(description="Concise rationale linking outcome to strategy adjustment")
 
@@ -60,6 +60,8 @@ class StrategyWeightDelta(BaseModel):
 class PostMortemSchema(BaseModel):
     structural_diagnosis: str = Field(description="Diagnosis by Chart & Structure Auditor")
     risk_criticism: str = Field(description="Criticism by Risk & Bankroll Critic")
+    primefx_edge_classification: str = Field(description="Which PrimeFX Liquidity/Inducement/POI pattern aligned (e.g. EQH_SWEEP_IDM_OB, PRE_IDM_NONE)")
+    primefx_flaw_detected: str = Field(description="Which flaw contributed to loss or risk exposure (NONE, PRE_INDUCEMENT_TRAP, OVER_SIZED_RISK, REVENGE_REENTRY, COUNTER_H4_BIAS, JUMP_SPIKE_STOPOUT)")
     actionable_rule_mutation: str = Field(description="Concrete rule mutation by Council Strategist")
     recommended_min_sweep_candles: int = Field(default=2, description="Minimum confirmation candles required after sweep (1-4)")
     recommended_min_rr: float = Field(default=2.0, description="Minimum planned R:R threshold (1.5-4.0)")
@@ -68,14 +70,15 @@ class PostMortemSchema(BaseModel):
 
 class GeminiCouncil:
     NOTES_FILE = "data/COUNCIL_NOTES.md"
-    SCREENING_MODELS = ["gemini-2.5-flash", "gemini-3-flash-preview"]
-    COUNCIL_PRO_MODELS = ["gemini-3.1-pro-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-3-flash-preview"]
+    SCREENING_MODELS = ["gemini-2.5-flash", "gemini-3-flash-preview", "gemini-3.5-flash", "gemini-2.5-flash-lite"]
+    COUNCIL_PRO_MODELS = ["gemini-2.5-pro", "gemini-3.1-pro-preview", "gemini-2.5-flash", "gemini-3-flash-preview", "gemini-2.5-flash-lite"]
     RETRY_BACKOFFS = [2.0, 5.0, 12.0]
 
     def __init__(self, api_key: Optional[str] = None, notes_file: Optional[str] = None):
         self.NOTES_FILE = notes_file or self.NOTES_FILE
         self.api_key = api_key if api_key is not None else (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
         self.client = None
+        self._unavailable_models: set[str] = set()
         if GENAI_AVAILABLE and self.api_key:
             try:
                 self.client = genai.Client(api_key=self.api_key)
@@ -95,6 +98,8 @@ class GeminiCouncil:
             return True
         if "limit: 0" in msg and ("FreeTier" in msg or "RESOURCE_EXHAUSTED" in msg):
             return True
+        if ("PerDay" in msg or "GenerateRequestsPerDay" in msg) and ("429" in msg or "RESOURCE_EXHAUSTED" in msg):
+            return True
         return False
 
     def _call_with_retry(
@@ -113,10 +118,12 @@ class GeminiCouncil:
         if not self.client:
             raise RuntimeError("Gemini client is not initialized (missing API key or google-genai SDK)")
 
-        candidate_models = [model]
-        for fb in (fallback_models or []):
-            if fb not in candidate_models:
-                candidate_models.append(fb)
+        candidate_models = []
+        for m in [model] + list(fallback_models or []):
+            if m not in candidate_models and m not in getattr(self, "_unavailable_models", set()):
+                candidate_models.append(m)
+        if not candidate_models:
+            candidate_models = [model]
 
         last_err: Optional[Exception] = None
         for model_name in candidate_models:
@@ -131,6 +138,8 @@ class GeminiCouncil:
                     last_err = e
                     logger.error(f"Gemini API error [{model_name}] (attempt {attempt + 1}/{max_retries}): {type(e).__name__}: {e}")
                     if self._is_permanent_model_unavailable(e):
+                        if hasattr(self, "_unavailable_models"):
+                            self._unavailable_models.add(model_name)
                         break  # Immediately advance to fallback model without wasting backoff time
                     if attempt < max_retries - 1:
                         wait_s = self.RETRY_BACKOFFS[min(attempt, len(self.RETRY_BACKOFFS) - 1)]
@@ -252,11 +261,14 @@ Respond strictly using TradeValidationSchema.
         image_path: Optional[str] = None,
         before_image_path: Optional[str] = None,
         after_image_path: Optional[str] = None,
+        before_screenshots: Optional[Dict[str, str]] = None,
+        after_screenshots: Optional[Dict[str, str]] = None,
+        playbook_path: str = "knowledge_base/primefx_master_playbook.json",
     ) -> Dict[str, Any]:
         """
-        Executes multi-persona multimodal post-mortem comparing BEFORE & AFTER charts.
-        Uses typed PostMortemSchema (StrategyWeightDelta list — zero Dict fields).
-        Prefers Pro model chain with clean fallback to multimodal Flash when Pro quota is constrained.
+        Executes multi-persona multimodal post-mortem comparing ALL BEFORE & AFTER charts
+        (H4, H1, M15) alongside 5W ledger telemetry and PrimeFX master playbook principles.
+        Uses typed PostMortemSchema (zero Dict fields) across Pro -> Flash cascade.
         """
         symbol = trade_data.get("symbol", "UNKNOWN")
         outcome = trade_data.get("outcome", "LOSS")
@@ -264,23 +276,48 @@ Respond strictly using TradeValidationSchema.
         r_mult = trade_data.get("realized_r", 0.0)
         strategy = trade_data.get("strategy", "SMC_ICT")
 
-        prompt = f"""
-You are the 3-Persona Quantitative Council governing an autonomous Deriv Synthetic Indices bot:
-1. Chart & Structure Auditor: Inspect BEFORE & AFTER chart visuals, sweep zones, and liquidity invalidation
-2. Risk & Bankroll Critic: Audit ATR spacing, break-even timing, entry zone width, and pending order freshness
-3. Council Strategist: Prescribe concrete machine-enforceable rule mutations (sweep confirmation candles, min R:R) and typed Bayesian strategy weight deltas
+        playbook_digest = ""
+        if os.path.exists(playbook_path):
+            try:
+                with open(playbook_path, "r") as pf:
+                    pb = json.load(pf)
+                playbook_digest = json.dumps({
+                    "winning_checklist": pb.get("winning_trade_checklist", []),
+                    "critical_flaws": pb.get("critical_flaws_to_counter_with_risk_shield", []),
+                    "liquidity_rules": pb.get("liquidity_sweep_and_inducement_rules", []),
+                }, default=str)
+            except Exception:
+                playbook_digest = ""
 
-Conduct an unsparing, specific post-mortem on this resolved trade (explain Who, What, When, Where, Why):
+        prompt = f"""
+You are the 3-Persona Quantitative Council governing an autonomous Deriv Synthetic & Jump Indices bot:
+1. Chart & Structure Auditor: Inspect ALL attached BEFORE & AFTER chart visuals (H4, H1, M15), liquidity raids, inducement (IDM) sweeps, and POI delivery.
+2. Risk & Bankroll Critic: Audit ATR spacing, Jump-index volatility protection, break-even ratcheting, and 5W capital discipline.
+3. Council Strategist: Classify whether the setup aligned with a winning PrimeFX pattern or suffered one of his known flaws, and output typed StrategyWeightDelta + machine-enforceable parameters.
+
+PrimeFX Master Playbook Reference:
+{playbook_digest[:3000] if playbook_digest else 'Enforce IDM sweep prior to extreme POI entry, 2-candle displacement, and 1.5% capital shield.'}
+
+Conduct an unsparing 5W post-mortem on this resolved trade:
 Symbol: {symbol}
 Outcome: {outcome} (Realized PnL: ${pnl:.2f}, R-multiple: {r_mult:.2f}R)
 Strategy Primary: {strategy}
-Trade Details: {json.dumps(trade_data, default=str)}
+Trade Telemetry & 5W: {json.dumps(trade_data, default=str)}
 """
         if self.client:
             try:
                 contents: list = [prompt]
-                attached_paths = []
-                for p in [before_image_path, after_image_path, image_path]:
+                candidate_paths: List[str] = []
+                for tf in ["H4", "H1", "M15"]:
+                    if before_screenshots and tf in before_screenshots:
+                        candidate_paths.append(before_screenshots[tf])
+                for tf in ["H4", "H1", "M15"]:
+                    if after_screenshots and tf in after_screenshots:
+                        candidate_paths.append(after_screenshots[tf])
+                candidate_paths.extend([before_image_path or "", after_image_path or "", image_path or ""])
+
+                attached_paths: List[str] = []
+                for p in candidate_paths:
                     if p and p not in attached_paths and os.path.exists(p) and os.path.getsize(p) > 500:
                         with open(p, "rb") as img_f:
                             contents.append(types.Part.from_bytes(data=img_f.read(), mime_type="image/png"))
@@ -292,7 +329,7 @@ Trade Details: {json.dumps(trade_data, default=str)}
                     temperature=0.25
                 )
                 response, used_model = self._call_with_retry(
-                    "gemini-3.1-pro-preview",
+                    "gemini-2.5-pro",
                     contents,
                     config=config,
                     fallback_models=self.COUNCIL_PRO_MODELS
@@ -301,6 +338,8 @@ Trade Details: {json.dumps(trade_data, default=str)}
                 diagnosis = parsed.get("structural_diagnosis", "")
                 criticism = parsed.get("risk_criticism", "")
                 mutation = parsed.get("actionable_rule_mutation", "")
+                edge_cls = parsed.get("primefx_edge_classification", "PRIMEFX_LIQUIDITY_POI")
+                flaw_cls = parsed.get("primefx_flaw_detected", "NONE")
                 raw_deltas = parsed.get("weight_adjustments", []) or []
                 weight_adj = {
                     item["strategy_name"]: float(item["delta"])
@@ -316,11 +355,14 @@ Trade Details: {json.dumps(trade_data, default=str)}
                     "outcome": outcome,
                     "structural_diagnosis": diagnosis,
                     "risk_criticism": criticism,
+                    "primefx_edge_classification": edge_cls,
+                    "primefx_flaw_detected": flaw_cls,
                     "actionable_rule_mutation": mutation,
                     "recommended_min_sweep_candles": int(parsed.get("recommended_min_sweep_candles", 2)),
                     "recommended_min_rr": float(parsed.get("recommended_min_rr", 2.0)),
                     "weight_adjustments": raw_deltas,
                     "weight_adjustment": weight_adj,
+                    "charts_inspected_count": len(attached_paths),
                     "ai_model": used_model,
                     "raw_response": f"[{used_model}] {response.text}"
                 }
@@ -329,14 +371,18 @@ Trade Details: {json.dumps(trade_data, default=str)}
 
         # Robust heuristic fallback
         if outcome == "WIN":
-            diagnosis = f"Structure confirmed: {strategy} displacement cleanly targeted opposing liquidity."
+            diagnosis = f"Structure confirmed: PrimeFX sweep + {strategy} displacement cleanly targeted opposing liquidity."
             criticism = "Risk respected: Stop loss remained protected outside ATR noise corridor."
+            edge_cls = "PRIMEFX_SWEEP_POI_WIN"
+            flaw_cls = "NONE"
             mutation = f"Reinforce {strategy} weighting on {symbol} during current regime."
             weight_adj = {strategy: 0.03}
         else:
             diagnosis = f"Structural invalidation: Price wicked into unmitigated pool before reversing on {symbol}."
-            criticism = "Risk alert: Entry occurred too early without waiting for 2-candle absorption confirmation."
-            mutation = f"Require minimum 2-candle confirmation after liquidity sweep on {symbol}."
+            criticism = "Risk alert: Entry occurred too early without waiting for IDM sweep & 2-candle confirmation."
+            edge_cls = "PRE_IDM_UNCONFIRMED"
+            flaw_cls = "PRE_INDUCEMENT_TRAP"
+            mutation = f"Require IDM sweep + minimum 2-candle confirmation and enforce 2h cooldown on {symbol}."
             weight_adj = {strategy: -0.03}
 
         self._append_to_notes(symbol, outcome, pnl, r_mult, strategy, diagnosis, criticism, mutation, "heuristic_fallback")
@@ -346,11 +392,14 @@ Trade Details: {json.dumps(trade_data, default=str)}
             "outcome": outcome,
             "structural_diagnosis": diagnosis,
             "risk_criticism": criticism,
+            "primefx_edge_classification": edge_cls,
+            "primefx_flaw_detected": flaw_cls,
             "actionable_rule_mutation": mutation,
             "recommended_min_sweep_candles": 2,
             "recommended_min_rr": 2.0,
             "weight_adjustments": [{"strategy_name": k, "delta": v, "reason": mutation} for k, v in weight_adj.items()],
             "weight_adjustment": weight_adj,
+            "charts_inspected_count": 0,
             "ai_model": "heuristic_fallback",
             "raw_response": "Heuristic Engine"
         }

@@ -57,12 +57,14 @@ class PostMortemManager:
             screenshot_path if (screenshot_path and os.path.exists(screenshot_path)) else before_h1
         )
 
-        # 1. Run Gemini Council Multimodal Audit
+        # 1. Run Gemini Council Multimodal Audit (passing ALL 6 BEFORE/AFTER charts + PrimeFX Playbook)
         council_review = self.council.run_post_mortem(
             trade_result,
             image_path=img_fallback,
             before_image_path=before_h1,
-            after_image_path=after_h1
+            after_image_path=after_h1,
+            before_screenshots=before_screenshots,
+            after_screenshots=after_screenshots,
         )
 
         what_improved = council_review.get("actionable_rule_mutation", f"Reinforce risk discipline on {symbol}")
@@ -150,15 +152,22 @@ class PostMortemManager:
 
         rec_candles = int(review.get("recommended_min_sweep_candles", 2))
         rec_rr = float(review.get("recommended_min_rr", 2.0))
+        flaw = str(review.get("primefx_flaw_detected", "NONE")).upper()
 
         if outcome == "LOSS":
             sym_cfg["min_sweep_confirmation_candles"] = max(2, min(4, rec_candles))
             sym_cfg["min_rr_ratio"] = round(max(2.0, min(3.5, rec_rr)), 2)
-            # Enforce blocking Brownian chop per symbol on any loss
             blocked = data.setdefault("blocked_regimes_by_symbol", {})
             sym_blocked = blocked.setdefault(symbol, [])
             if "RANDOM_WALK_CHOP" not in sym_blocked:
                 sym_blocked.append("RANDOM_WALK_CHOP")
+
+            if flaw == "PRE_INDUCEMENT_TRAP":
+                data["require_inducement_sweep"] = True
+            elif flaw == "REVENGE_REENTRY":
+                data["revenge_cooldown_hours"] = round(max(2.0, float(data.get("revenge_cooldown_hours", 2.0))), 1)
+            elif flaw == "JUMP_SPIKE_STOPOUT":
+                sym_cfg["atr_sl_buffer_multiplier"] = round(max(0.75, float(sym_cfg.get("atr_sl_buffer_multiplier", 0.5)) + 0.15), 2)
 
         mutations = data.setdefault("recent_mutations", [])
         mutations.insert(0, {
@@ -166,6 +175,8 @@ class PostMortemManager:
             "trade_id": trade_id,
             "symbol": symbol,
             "outcome": outcome,
+            "edge_class": review.get("primefx_edge_classification", ""),
+            "flaw_detected": flaw,
             "rule": review.get("actionable_rule_mutation", "")
         })
         data["recent_mutations"] = mutations[:15]
@@ -190,24 +201,27 @@ class PostMortemManager:
 
             instruments = data.setdefault("instruments", {})
             sym_dict = instruments.setdefault(symbol, {})
-            all_strats = ["SMC_ICT", "SUPPLY_DEMAND", "PRICE_ACTION_AUCTION"]
-
             for regime in ["DIRECTIONAL_TREND", "ROTATIONAL_RANGE", "HIGH_VOLATILITY_EXPANSION"]:
                 regime_data = sym_dict.setdefault(regime, {
-                    "SMC_ICT": 0.40,
-                    "SUPPLY_DEMAND": 0.35,
-                    "PRICE_ACTION_AUCTION": 0.25,
+                    "SMC_ICT": 0.45,
+                    "SUPPLY_DEMAND": 0.30,
+                    "PRICE_ACTION": 0.25,
                     "win_rate": 0.55,
                     "profit_factor": 1.70,
                     "sample_size": 10
                 })
+
+                # Dynamically preserve key naming (e.g. PRICE_ACTION vs legacy PRICE_ACTION_AUCTION)
+                pa_key = "PRICE_ACTION_AUCTION" if "PRICE_ACTION_AUCTION" in regime_data else "PRICE_ACTION"
+                all_strats = ["SMC_ICT", "SUPPLY_DEMAND", pa_key]
 
                 # Outcome anchor ensures win increases primary weight & loss trims it
                 outcome_alpha = 0.05 if outcome == "WIN" else -0.05
                 for s_name in all_strats:
                     cur_w = regime_data.get(s_name, 0.33)
                     ai_delta = float((suggested_deltas or {}).get(s_name, 0.0))
-                    # Clamp AI delta safely to [-0.05, +0.05]
+                    if s_name == pa_key and ai_delta == 0.0:
+                        ai_delta = float((suggested_deltas or {}).get("PRICE_ACTION", 0.0))
                     ai_delta = max(-0.05, min(0.05, ai_delta))
                     eff_delta = (outcome_alpha if s_name == strategy else 0.0) + (ai_delta * 0.5)
                     regime_data[s_name] = round(max(0.10, min(0.70, cur_w + eff_delta)), 3)

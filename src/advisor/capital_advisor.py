@@ -18,13 +18,19 @@ from src.council.readiness_gate import ReadinessGate
 
 
 class CapitalAdvisor:
-    # Candidate Deriv indices (nano-lot safe picks prioritized first)
+    # Candidate Deriv indices (nano-lot safe VIX + Step + Jump Indices prioritized cleanly)
     SYNTHETIC_INSTRUMENTS = [
         "STEPINDEX",
+        "JD75",
+        "JD100",
         "1HZ25V",
         "1HZ50V",
         "1HZ10V",
         "1HZ75V",
+        "1HZ100V",
+        "JD10",
+        "JD25",
+        "JD50",
         "R_75",
         "R_100",
         "BOOM1000",
@@ -74,10 +80,17 @@ class CapitalAdvisor:
             if df_h1 is None or len(df_h1) < 30:
                 continue
             df_m15 = self.ws.get_candles(symbol, timeframe="M15", count=150)
+            df_h4 = self.ws.get_candles(symbol, timeframe="H4", count=100)
+            hours_loss = self.db.get_hours_since_last_loss(symbol)
 
             macro_bias = macro_map.get(symbol)
             tip = self.confluence.generate_tip(
-                symbol, df_h1, m15_df=df_m15, macro_bias=macro_bias
+                symbol,
+                df_h1,
+                m15_df=df_m15,
+                h4_df=df_h4,
+                macro_bias=macro_bias,
+                hours_since_last_loss=hours_loss,
             )
             if tip.direction == "NEUTRAL_NO_TRADE":
                 continue
@@ -124,11 +137,14 @@ class CapitalAdvisor:
             latest_council_note = "Enforce 2-candle sweep confirmation and break-even ratchet (+1.0R) upon displacement."
 
         if not candidates:
-            # Evaluate safest nano-lot fallback (STEPINDEX first, else 1HZ25V) without forcing unviable lots
             symbol = "STEPINDEX"
             df_h1 = self.ws.get_candles(symbol, timeframe="H1", count=150)
             df_m15 = self.ws.get_candles(symbol, timeframe="M15", count=150)
-            tip = self.confluence.generate_tip(symbol, df_h1, m15_df=df_m15)
+            df_h4 = self.ws.get_candles(symbol, timeframe="H4", count=100)
+            tip = self.confluence.generate_tip(
+                symbol, df_h1, m15_df=df_m15, h4_df=df_h4,
+                hours_since_last_loss=self.db.get_hours_since_last_loss(symbol)
+            )
             entry_price = tip.entry_max if tip.direction == "BULLISH" else tip.entry_min
             viability = self.position_sizer.evaluate_instrument_viability(
                 symbol=symbol,
@@ -223,7 +239,7 @@ class CapitalAdvisor:
 - **Directional Bias**: **{data['direction']}**
 - **Market Regime**: `{data['market_regime']}`
 - **Primary Strategy**: `{data['primary_strategy']}`
-- **Champion Rule Alignment**: *{data['champions_rule'] or 'Auction Value Area Absorption'}*
+- **Champion Rule Alignment**: *{data['champions_rule'] or 'PrimeFX Pure Price-Action + Liquidity Playbook'}*
 
 ---
 

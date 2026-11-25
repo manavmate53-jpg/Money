@@ -324,6 +324,30 @@ class DatabaseManager:
             cursor.execute("SELECT * FROM losing_trades ORDER BY closed_at DESC")
             return [dict(r) for r in cursor.fetchall()]
 
+    def get_last_loss_for_symbol(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Returns the most recent losing trade on `symbol` for anti-revenge cooldown checks."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM losing_trades WHERE symbol = ? ORDER BY closed_at DESC LIMIT 1",
+                (symbol,)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def get_hours_since_last_loss(self, symbol: str) -> Optional[float]:
+        """Returns elapsed hours since the latest SL hit on `symbol`, or None if never lost."""
+        last_loss = self.get_last_loss_for_symbol(symbol)
+        if not last_loss or not last_loss.get("closed_at"):
+            return None
+        try:
+            closed_dt = datetime.fromisoformat(last_loss["closed_at"])
+            if closed_dt.tzinfo is None:
+                closed_dt = closed_dt.replace(tzinfo=timezone.utc)
+            return max(0.0, (datetime.now(timezone.utc) - closed_dt).total_seconds() / 3600.0)
+        except Exception:
+            return None
+
     def get_active_trades(self) -> List[Dict[str, Any]]:
         with self.get_connection() as conn:
             cursor = conn.cursor()

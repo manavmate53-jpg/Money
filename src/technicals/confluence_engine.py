@@ -1,9 +1,11 @@
 """
-Multi-Framework Confluence Engine.
-Integrates SMC/ICT, Supply & Demand, and Price Action / Auction Theory
-with machine-enforced Council rules (config/active_filters.json), Bayesian
-weights (config/strategy_weights.json), mandatory H4 macro bias alignment,
-2-candle liquidity sweep confirmation, and 0.25 * ATR_14(M15) entry bands.
+Multi-Framework PrimeFX Liquidity, POI & Pure Price-Action Confluence Engine.
+Zero Volume Profile (VAH/VAL), zero DOM, zero orderflow assumptions.
+Integrates:
+- PrimeFX LiquidityEngine (BSL/SSL, EQH/EQL, PDH/PDL, P4HH/P4HL, Sweep vs Breakout, Inducement Trap)
+- PoiPriceActionEngine (H4->H1->M15 OB, FVG, IFVG, Breaker Blocks, OTE Equilibrium)
+- Pure PriceActionEngine (MSS displacement, S/R polarity flips, One-Time Framing, Pin Bar/Engulfing)
+- Institutional Risk & Jump-Index Volatility Guards + Executable Council Rules (active_filters.json).
 """
 
 import json
@@ -16,6 +18,8 @@ from pydantic import BaseModel, Field
 from src.technicals.smc_ict import SmcIctEngine
 from src.technicals.supply_demand import SupplyDemandEngine
 from src.technicals.price_action import PriceActionEngine
+from src.technicals.liquidity_engine import LiquidityEngine
+from src.technicals.poi_price_action import PoiPriceActionEngine
 from src.simulator.hold_time_estimator import HoldTimeEstimator
 
 logger = logging.getLogger(__name__)
@@ -55,6 +59,8 @@ class ConfluenceEngine:
         self.smc = SmcIctEngine()
         self.sd = SupplyDemandEngine()
         self.pa = PriceActionEngine()
+        self.liq = LiquidityEngine()
+        self.poi_engine = PoiPriceActionEngine()
         self.hold_estimator = HoldTimeEstimator()
         self.weights = self._load_weights()
         self.active_filters = self._load_filters()
@@ -65,9 +71,9 @@ class ConfluenceEngine:
                 return json.load(f)
         return {
             "default_framework_weights": {
-                "SMC_ICT": 0.40,
-                "SUPPLY_DEMAND": 0.35,
-                "PRICE_ACTION_AUCTION": 0.25
+                "SMC_ICT": 0.45,
+                "SUPPLY_DEMAND": 0.30,
+                "PRICE_ACTION": 0.25
             }
         }
 
@@ -81,6 +87,9 @@ class ConfluenceEngine:
         return {
             "min_sweep_confirmation_candles": 2,
             "max_pending_hours": 6,
+            "revenge_cooldown_hours": 2.0,
+            "require_inducement_sweep": True,
+            "jump_index_min_sl_atr_mult": 1.5,
             "min_rr_ratio": 2.0,
             "atr_sl_buffer_multiplier": 0.5,
             "entry_zone_m15_atr_width": 0.25,
@@ -104,15 +113,16 @@ class ConfluenceEngine:
         if symbol in instruments and regime in instruments[symbol]:
             spec_w = instruments[symbol][regime]
             return {
-                "SMC_ICT": spec_w.get("SMC_ICT", 0.40),
-                "SUPPLY_DEMAND": spec_w.get("SUPPLY_DEMAND", 0.35),
-                "PRICE_ACTION_AUCTION": spec_w.get("PRICE_ACTION_AUCTION", 0.25)
+                "SMC_ICT": spec_w.get("SMC_ICT", 0.45),
+                "SUPPLY_DEMAND": spec_w.get("SUPPLY_DEMAND", 0.30),
+                "PRICE_ACTION": spec_w.get("PRICE_ACTION", spec_w.get("PRICE_ACTION_AUCTION", 0.25)),
             }
-        return self.weights.get("default_framework_weights", {
-            "SMC_ICT": 0.40,
-            "SUPPLY_DEMAND": 0.35,
-            "PRICE_ACTION_AUCTION": 0.25
-        })
+        d = self.weights.get("default_framework_weights", {})
+        return {
+            "SMC_ICT": d.get("SMC_ICT", 0.45),
+            "SUPPLY_DEMAND": d.get("SUPPLY_DEMAND", 0.30),
+            "PRICE_ACTION": d.get("PRICE_ACTION", d.get("PRICE_ACTION_AUCTION", 0.25)),
+        }
 
     def _neutral_tip(self, symbol: str, regime: str, current_price: float, atr_14: float, reasons: List[str]) -> TradingTip:
         hold_est = self.hold_estimator.estimate_hold_time(current_price, current_price, atr_14, 60)
@@ -144,28 +154,36 @@ class ConfluenceEngine:
         symbol: str,
         df: pd.DataFrame,
         m15_df: Optional[pd.DataFrame] = None,
+        h4_df: Optional[pd.DataFrame] = None,
+        d1_df: Optional[pd.DataFrame] = None,
         macro_bias: Optional[str] = None,
         h4_mss_confirmed: bool = False,
+        hours_since_last_loss: Optional[float] = None,
     ) -> TradingTip:
         """
-        Runs SMC, Supply/Demand, and Price Action engines on dataframe, enforcing active
-        Council rules, H4 macro bias alignment, 2-candle sweep confirmation, and M15 ATR entry bands.
+        Pure Price-Action & PrimeFX Liquidity/POI Setup Generator.
+        Enforces Inducement clearing, Liquidity Sweep 2-candle confirmation,
+        Anti-Revenge Cooldown, H4 Macro Alignment, M15 ATR zone calibration, and Jump Index SL guard.
         """
         self.reload_filters()
         current_price = float(df["close"].iloc[-1])
 
-        smc_res = self.smc.analyze(df)
-        sd_res = self.sd.analyze(df)
         pa_res = self.pa.analyze(df)
-
         regime = pa_res["regime"]
         atr_14 = pa_res["atr_14"] or 1.0
         m15_atr = atr_14 * 0.5
         if m15_df is not None and len(m15_df) >= 10:
-            m15_atr_series = self.pa.calculate_atr(m15_df)
-            m15_atr = float(m15_atr_series.iloc[-1]) or m15_atr
+            m15_atr = float(self.pa.calculate_atr(m15_df).iloc[-1]) or m15_atr
 
-        # Rule check: Blocked regimes per symbol from Council active_filters.json
+        # Rule 1: Anti-Revenge Cooldown check (block same symbol for 2h after SL hit)
+        cooldown_h = float(self.active_filters.get("revenge_cooldown_hours", 2.0))
+        if hours_since_last_loss is not None and hours_since_last_loss < cooldown_h:
+            return self._neutral_tip(
+                symbol, regime, current_price, atr_14,
+                [f"Anti-Revenge Shield: Blocked re-entry on {symbol} ({hours_since_last_loss:.1f}h < {cooldown_h:.1f}h post-SL cooldown)"]
+            )
+
+        # Rule 2: Blocked regimes per symbol
         blocked_regimes = self.active_filters.get("blocked_regimes_by_symbol", {}).get(symbol, [])
         if regime in blocked_regimes:
             return self._neutral_tip(
@@ -173,93 +191,120 @@ class ConfluenceEngine:
                 [f"Council Filter: Regime '{regime}' blocked for {symbol} by active_filters.json"]
             )
 
+        # Run Liquidity & Multi-TF POI Engines
+        liq_res = self.liq.analyze(df, df_h4=h4_df, df_d1=d1_df, df_m15=m15_df)
+        poi_res = self.poi_engine.analyze(df, df_h4=h4_df, df_m15=m15_df)
+        sd_res = self.sd.analyze(df)
+        smc_res = self.smc.analyze(df)
+
         weights = self.get_instrument_weights(symbol, regime)
         min_confirm = int(self._get_symbol_filter_val(symbol, "min_sweep_confirmation_candles", 2))
         min_rr = float(self._get_symbol_filter_val(symbol, "min_rr_ratio", 2.0))
         sl_buf_mult = float(self._get_symbol_filter_val(symbol, "atr_sl_buffer_multiplier", 0.5))
         zone_m15_mult = float(self._get_symbol_filter_val(symbol, "entry_zone_m15_atr_width", 0.25))
         require_macro = bool(self.active_filters.get("require_macro_bias_alignment", True))
+        require_idm = bool(self.active_filters.get("require_inducement_sweep", True))
+        is_jump = symbol.upper().startswith("JD")
+        jump_sl_mult = float(self.active_filters.get("jump_index_min_sl_atr_mult", 1.5))
 
         bullish_score = 0.0
         bearish_score = 0.0
         reasons: List[str] = []
         champions_match = None
 
-        # 1. SMC / ICT + Sweep Confirmation Check
-        smc_trend = smc_res["structure"]["trend"]
-        sweeps = smc_res["liquidity_sweeps"]
-        # Use M15 sweep confirmation if M15 candles are available alongside H1 sweep
-        m15_sweeps = self.smc.detect_liquidity_sweeps(m15_df) if (m15_df is not None and len(m15_df) >= 20) else None
+        # 1. PrimeFX Liquidity Sweep & 2-Candle Confirmation Scoring
         w_smc = weights["SMC_ICT"]
+        bull_sweep = liq_res.get("bullish_sweep")
+        bear_sweep = liq_res.get("bearish_sweep")
+        smc_trend = smc_res["structure"]["trend"]
 
-        ssl_confirmed = sweeps["ssl_swept"] and (
-            sweeps.get("confirmation_candles", 0) >= min_confirm
-            or (m15_sweeps and m15_sweeps.get("ssl_swept") and m15_sweeps.get("confirmation_candles", 0) >= min_confirm)
-        )
-        bsl_confirmed = sweeps["bsl_swept"] and (
-            sweeps.get("confirmation_candles", 0) >= min_confirm
-            or (m15_sweeps and m15_sweeps.get("bsl_swept") and m15_sweeps.get("confirmation_candles", 0) >= min_confirm)
-        )
+        bull_sweep_confirmed = bool(bull_sweep and bull_sweep.get("confirmation_candles", 0) >= min_confirm)
+        bear_sweep_confirmed = bool(bear_sweep and bear_sweep.get("confirmation_candles", 0) >= min_confirm)
 
-        if ssl_confirmed:
+        if bull_sweep_confirmed:
             bullish_score += 1.0 * w_smc
-            conf_cnt = max(sweeps.get("confirmation_candles", 0), m15_sweeps.get("confirmation_candles", 0) if m15_sweeps else 0)
-            reasons.append(f"ICT: SSL swept at {sweeps['sweep_level']:.2f} with {conf_cnt}-candle displacement confirmation")
-        elif sweeps["ssl_swept"]:
-            reasons.append(f"ICT Watch: SSL wicked at {sweeps['sweep_level']:.2f}; awaiting {min_confirm}-candle confirmation")
+            champions_match = f"PrimeFX Liquidity Raid: {bull_sweep['pool_type']} Swept + {bull_sweep['confirmation_candles']}-Bar Hold"
+            reasons.append(f"Liquidity: {bull_sweep['pool_type']} swept at {bull_sweep['level']:.2f} ({bull_sweep['confirmation_candles']}-candle hold)")
+        elif bull_sweep:
+            reasons.append(f"Liquidity Watch: {bull_sweep['pool_type']} wicked at {bull_sweep['level']:.2f}; awaiting {min_confirm}-candle hold")
 
-        if bsl_confirmed:
+        if bear_sweep_confirmed:
             bearish_score += 1.0 * w_smc
-            conf_cnt = max(sweeps.get("confirmation_candles", 0), m15_sweeps.get("confirmation_candles", 0) if m15_sweeps else 0)
-            reasons.append(f"ICT: BSL swept at {sweeps['sweep_level']:.2f} with {conf_cnt}-candle displacement confirmation")
-        elif sweeps["bsl_swept"]:
-            reasons.append(f"ICT Watch: BSL wicked at {sweeps['sweep_level']:.2f}; awaiting {min_confirm}-candle confirmation")
+            champions_match = f"PrimeFX Liquidity Raid: {bear_sweep['pool_type']} Swept + {bear_sweep['confirmation_candles']}-Bar Hold"
+            reasons.append(f"Liquidity: {bear_sweep['pool_type']} swept at {bear_sweep['level']:.2f} ({bear_sweep['confirmation_candles']}-candle hold)")
+        elif bear_sweep:
+            reasons.append(f"Liquidity Watch: {bear_sweep['pool_type']} wicked at {bear_sweep['level']:.2f}; awaiting {min_confirm}-candle hold")
 
-        if not ssl_confirmed and not bsl_confirmed:
+        if not bull_sweep_confirmed and not bear_sweep_confirmed:
             if smc_trend == "BULLISH":
                 bullish_score += 0.6 * w_smc
-                reasons.append("ICT: Bullish market structure with higher swing highs and higher swing lows")
+                reasons.append("Structure: Bullish HH/HL structure progression")
             elif smc_trend == "BEARISH":
                 bearish_score += 0.6 * w_smc
-                reasons.append("ICT: Bearish market structure with lower swing highs and lower swing lows")
+                reasons.append("Structure: Bearish LL/LH structure progression")
 
-        # 2. Supply & Demand
+        # 2. PrimeFX Multi-Timeframe POI & Inducement Gate (OB / FVG / IFVG / Breaker + S&D)
         w_sd = weights["SUPPLY_DEMAND"]
+        best_bull_poi = poi_res.get("best_bullish_poi")
+        best_bear_poi = poi_res.get("best_bearish_poi")
+        trap_bull = poi_res.get("blocked_bullish_trap")
+        trap_bear = poi_res.get("blocked_bearish_trap")
+
+        if best_bull_poi and best_bull_poi["distance_atr"] <= 1.8:
+            bullish_score += 0.85 * w_sd
+            reasons.append(
+                f"POI: {best_bull_poi['timeframe']} {best_bull_poi['poi_kind']} [{best_bull_poi['zone_bottom']:.2f}-{best_bull_poi['zone_top']:.2f}] ({best_bull_poi['inducement_status']})"
+            )
+        elif trap_bull and require_idm and not bull_sweep_confirmed:
+            bullish_score -= 0.15
+            reasons.append(f"Inducement Warning: Unswept IDM at {trap_bull['idm_level']} resting in front of Bullish POI")
+
+        if best_bear_poi and best_bear_poi["distance_atr"] <= 1.8:
+            bearish_score += 0.85 * w_sd
+            reasons.append(
+                f"POI: {best_bear_poi['timeframe']} {best_bear_poi['poi_kind']} [{best_bear_poi['zone_bottom']:.2f}-{best_bear_poi['zone_top']:.2f}] ({best_bear_poi['inducement_status']})"
+            )
+        elif trap_bear and require_idm and not bear_sweep_confirmed:
+            bearish_score -= 0.15
+            reasons.append(f"Inducement Warning: Unswept IDM at {trap_bear['idm_level']} resting in front of Bearish POI")
+
+        # S&D Fresh Zone boost
         nearest_d = sd_res["nearest_demand"]
         nearest_s = sd_res["nearest_supply"]
+        if nearest_d and nearest_d["is_fresh"] and (current_price - nearest_d["base_top"]) <= (1.5 * atr_14):
+            bullish_score += 0.25 * w_sd
+        if nearest_s and nearest_s["is_fresh"] and (nearest_s["base_bottom"] - current_price) <= (1.5 * atr_14):
+            bearish_score += 0.25 * w_sd
 
-        if nearest_d and nearest_d["is_fresh"]:
-            if (current_price - nearest_d["base_top"]) <= (1.5 * atr_14):
-                bullish_score += 0.8 * w_sd
-                reasons.append(f"S&D: Price near unmitigated {nearest_d['pattern']} demand zone [{nearest_d['base_bottom']:.2f} - {nearest_d['base_top']:.2f}]")
-        if nearest_s and nearest_s["is_fresh"]:
-            if (nearest_s["base_bottom"] - current_price) <= (1.5 * atr_14):
-                bearish_score += 0.8 * w_sd
-                reasons.append(f"S&D: Price near unmitigated {nearest_s['pattern']} supply zone [{nearest_s['base_bottom']:.2f} - {nearest_s['base_top']:.2f}]")
-
-        # 3. Price Action & Auction Theory
-        w_pa = weights["PRICE_ACTION_AUCTION"]
+        # 3. Pure Price Action (One-Time Framing, S/R Polarity Flip, Candlesticks — NO Volume Profile!)
+        w_pa = weights["PRICE_ACTION"]
         otf = pa_res["one_time_framing"]["status"]
-        va = pa_res["value_area"]
+        sr_flips = pa_res["sr_polarity_flips"]
         trigger = pa_res["candlestick_trigger"]
+        dealing_range = pa_res["dealing_range"]
 
-        if regime == "ROTATIONAL_RANGE":
-            champions_match = "Fabio Valentini: Rotational Range Value Area Mean Reversion"
-            if current_price <= va["val"] + (0.3 * va["range_width"]):
-                bullish_score += 0.9 * w_pa
-                reasons.append(f"Auction: Price in absorption zone at Value Area Low ({va['val']:.2f})")
-            elif current_price >= va["vah"] - (0.3 * va["range_width"]):
-                bearish_score += 0.9 * w_pa
-                reasons.append(f"Auction: Price in absorption zone at Value Area High ({va['vah']:.2f})")
+        if otf == "BULLISH_ONE_TIME_FRAMING":
+            champions_match = champions_match or "Emir Gams: Strict Bullish One-Time Framing (HH+HL+HC)"
+            bullish_score += 0.9 * w_pa
+            reasons.append("Price Action: Strict Bullish One-Time Framing (HH+HL+HC)")
+        elif otf == "BEARISH_ONE_TIME_FRAMING":
+            champions_match = champions_match or "Emir Gams: Strict Bearish One-Time Framing (LL+LH+LC)"
+            bearish_score += 0.9 * w_pa
+            reasons.append("Price Action: Strict Bearish One-Time Framing (LL+LH+LC)")
+
+        if sr_flips.get("bullish_flip"):
+            bullish_score += 0.5 * w_pa
+            reasons.append(f"Pure PA: Resistance-to-Support polarity flip @ {sr_flips['bullish_flip']:.2f}")
+        if sr_flips.get("bearish_flip"):
+            bearish_score += 0.5 * w_pa
+            reasons.append(f"Pure PA: Support-to-Resistance polarity flip @ {sr_flips['bearish_flip']:.2f}")
+
+        # Pure Discount/Premium 50% equilibrium alignment
+        eq_50 = dealing_range["equilibrium"]
+        if current_price <= eq_50:
+            bullish_score += 0.2 * w_pa
         else:
-            if otf == "BULLISH_ONE_TIME_FRAMING":
-                champions_match = "Emir Gams: Strict Bullish One-Time Framing (HH+HL+HC)"
-                bullish_score += 1.0 * w_pa
-                reasons.append("Price Action: Emir Gams Strict Bullish One-Time Framing confirmed")
-            elif otf == "BEARISH_ONE_TIME_FRAMING":
-                champions_match = "Emir Gams: Strict Bearish One-Time Framing (LL+LH+LC)"
-                bearish_score += 1.0 * w_pa
-                reasons.append("Price Action: Emir Gams Strict Bearish One-Time Framing confirmed")
+            bearish_score += 0.2 * w_pa
 
         if trigger["bias"] == "BULLISH":
             bullish_score += 0.4 * w_pa
@@ -268,11 +313,11 @@ class ConfluenceEngine:
             bearish_score += 0.4 * w_pa
             reasons.append(f"Candlestick Trigger: {trigger['pattern']}")
 
-        # Threshold evaluation
+        # Threshold gating
         threshold = 0.45
         if regime == "RANDOM_WALK_CHOP":
             threshold = 0.65
-            reasons.append("Hurst Dynamics: 0.46 <= H <= 0.54 Brownian chop detected; elevated threshold enforced")
+            reasons.append("Hurst Dynamics: 0.46 <= H <= 0.54 chop detected; elevated entry barrier enforced")
 
         candidate_dir = "NEUTRAL_NO_TRADE"
         if bullish_score > bearish_score and bullish_score >= threshold:
@@ -280,7 +325,16 @@ class ConfluenceEngine:
         elif bearish_score > bullish_score and bearish_score >= threshold:
             candidate_dir = "BEARISH"
 
-        # Mandatory H4 Macro Bias Alignment Gate
+        # Rule 4: Block pure pre-inducement trap entries if candidate lacks IDM clearing & lacks sweep
+        if require_idm:
+            if candidate_dir == "BULLISH" and trap_bull and not best_bull_poi and not bull_sweep_confirmed:
+                reasons.append(f"Inducement Gate: Blocked BUY trap before IDM ({trap_bull['idm_level']}) sweep")
+                return self._neutral_tip(symbol, regime, current_price, atr_14, reasons)
+            if candidate_dir == "BEARISH" and trap_bear and not best_bear_poi and not bear_sweep_confirmed:
+                reasons.append(f"Inducement Gate: Blocked SELL trap before IDM ({trap_bear['idm_level']}) sweep")
+                return self._neutral_tip(symbol, regime, current_price, atr_14, reasons)
+
+        # Rule 5: Mandatory H4 Macro Bias Alignment Gate
         if candidate_dir != "NEUTRAL_NO_TRADE" and macro_bias is not None and require_macro:
             mb = macro_bias.upper()
             has_mss = h4_mss_confirmed or bool(smc_res["structure"].get("mss"))
@@ -291,54 +345,78 @@ class ConfluenceEngine:
                 reasons.append(f"Macro Gate: Rejected counter-macro {candidate_dir} setup (H4 bias is {mb})")
                 return self._neutral_tip(symbol, regime, current_price, atr_14, reasons)
 
-        # ATR-calibrated zone width >= 0.25 * ATR_14(M15) to avoid micro-thin unfillable limit bands
+        # Entry zone calibration: 0.25 * ATR_14(M15) around POI/current price
         atr_band_width = max(round(zone_m15_mult * m15_atr, 2), round(atr_14 * 0.15, 2), 0.10)
+        pools = liq_res["pools"]
 
         if candidate_dir == "BULLISH":
             direction = "BULLISH"
             confidence = min(0.95, bullish_score)
-            primary_strat = "SMC_ICT" if ssl_confirmed or smc_trend == "BULLISH" else "SUPPLY_DEMAND"
-            secondary_strat = "PRICE_ACTION_AUCTION"
+            primary_strat = "SMC_ICT" if (bull_sweep_confirmed or smc_trend == "BULLISH") else "SUPPLY_DEMAND"
+            secondary_strat = "PRICE_ACTION"
 
-            if nearest_d:
-                anchor_top = nearest_d["base_top"]
-                raw_bottom = nearest_d["base_bottom"]
-                entry_max = round(anchor_top, 2)
-                entry_min = round(min(raw_bottom, anchor_top - atr_band_width), 2)
-                sl = round(entry_min - (sl_buf_mult * atr_14), 2)
+            anchor_zone = best_bull_poi or ({"zone_bottom": nearest_d["base_bottom"], "zone_top": nearest_d["base_top"]} if nearest_d else None)
+            if anchor_zone:
+                entry_max = round(anchor_zone["zone_top"], 2)
+                entry_min = round(min(anchor_zone["zone_bottom"], entry_max - atr_band_width), 2)
+                raw_sl = entry_min - (sl_buf_mult * atr_14)
             else:
-                # Size pullback band around current price using 0.25 * ATR_14(M15)
                 entry_max = round(current_price, 2)
                 entry_min = round(current_price - atr_band_width, 2)
-                sl = round(entry_max - (1.5 * atr_14), 2)
+                raw_sl = entry_max - (1.5 * atr_14)
+
+            # Sweep-extreme & Jump-Index SL Guard (>= 1.5 * ATR_14 beyond sweep extreme)
+            sweep_ext = bull_sweep["wick_extreme"] if bull_sweep else None
+            if is_jump or sweep_ext is not None:
+                min_jump_dist = (jump_sl_mult if is_jump else 1.0) * atr_14
+                floor_candidates = [raw_sl, entry_max - min_jump_dist]
+                if sweep_ext is not None:
+                    floor_candidates.append(sweep_ext - (0.35 * atr_14))
+                sl = round(min(floor_candidates), 2)
+            else:
+                sl = round(raw_sl, 2)
 
             sl_dist = abs(entry_max - sl)
             rr_target = max(2.5, min_rr)
-            tp1 = round(entry_max + (rr_target * sl_dist), 2)
-            tp2 = round(entry_max + (max(4.0, rr_target + 1.5) * sl_dist), 2)
+            # Aim TP1 at min R:R or opposing liquidity pool (BSL/PDH/EQH)
+            tp1_rr = round(entry_max + (rr_target * sl_dist), 2)
+            ext_targets = [t for t in [pools["pdh"], pools["p4hh"], *pools["eqh"], *pools["bsl_pools"]] if t > tp1_rr]
+            tp1 = tp1_rr
+            tp2 = round(min(ext_targets), 2) if ext_targets else round(entry_max + (max(4.0, rr_target + 1.5) * sl_dist), 2)
             be_trigger = round(entry_max + (1.0 * sl_dist), 2)
 
         elif candidate_dir == "BEARISH":
             direction = "BEARISH"
             confidence = min(0.95, bearish_score)
-            primary_strat = "SMC_ICT" if bsl_confirmed or smc_trend == "BEARISH" else "SUPPLY_DEMAND"
-            secondary_strat = "PRICE_ACTION_AUCTION"
+            primary_strat = "SMC_ICT" if (bear_sweep_confirmed or smc_trend == "BEARISH") else "SUPPLY_DEMAND"
+            secondary_strat = "PRICE_ACTION"
 
-            if nearest_s:
-                anchor_bottom = nearest_s["base_bottom"]
-                raw_top = nearest_s["base_top"]
-                entry_min = round(anchor_bottom, 2)
-                entry_max = round(max(raw_top, anchor_bottom + atr_band_width), 2)
-                sl = round(entry_max + (sl_buf_mult * atr_14), 2)
+            anchor_zone = best_bear_poi or ({"zone_bottom": nearest_s["base_bottom"], "zone_top": nearest_s["base_top"]} if nearest_s else None)
+            if anchor_zone:
+                entry_min = round(anchor_zone["zone_bottom"], 2)
+                entry_max = round(max(anchor_zone["zone_top"], entry_min + atr_band_width), 2)
+                raw_sl = entry_max + (sl_buf_mult * atr_14)
             else:
                 entry_min = round(current_price, 2)
                 entry_max = round(current_price + atr_band_width, 2)
-                sl = round(entry_min + (1.5 * atr_14), 2)
+                raw_sl = entry_min + (1.5 * atr_14)
+
+            sweep_ext = bear_sweep["wick_extreme"] if bear_sweep else None
+            if is_jump or sweep_ext is not None:
+                min_jump_dist = (jump_sl_mult if is_jump else 1.0) * atr_14
+                ceil_candidates = [raw_sl, entry_min + min_jump_dist]
+                if sweep_ext is not None:
+                    ceil_candidates.append(sweep_ext + (0.35 * atr_14))
+                sl = round(max(ceil_candidates), 2)
+            else:
+                sl = round(raw_sl, 2)
 
             sl_dist = abs(sl - entry_min)
             rr_target = max(2.5, min_rr)
-            tp1 = round(entry_min - (rr_target * sl_dist), 2)
-            tp2 = round(entry_min - (max(4.0, rr_target + 1.5) * sl_dist), 2)
+            tp1_rr = round(entry_min - (rr_target * sl_dist), 2)
+            ext_targets = [t for t in [pools["pdl"], pools["p4hl"], *pools["eql"], *pools["ssl_pools"]] if t < tp1_rr]
+            tp1 = tp1_rr
+            tp2 = round(max(ext_targets), 2) if ext_targets else round(entry_min - (max(4.0, rr_target + 1.5) * sl_dist), 2)
             be_trigger = round(entry_min - (1.0 * sl_dist), 2)
 
         else:
@@ -380,5 +458,5 @@ class ConfluenceEngine:
             estimated_hold_hours=hold_est["estimated_hours"],
             estimated_hold_candles=hold_est["estimated_candles"],
             confluence_reasons=reasons,
-            champions_rule_match=champions_match
+            champions_rule_match=champions_match or "PrimeFX Pure Price-Action + Liquidity Playbook"
         )

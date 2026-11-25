@@ -44,14 +44,17 @@ class PaperTrader:
         self.scraper = scraper
         self.filters_path = filters_path
 
-    def _get_max_pending_hours(self) -> float:
+    def _get_filter_float(self, key: str, default: float) -> float:
         if self.filters_path and os.path.exists(self.filters_path):
             try:
                 with open(self.filters_path, "r") as f:
-                    return float(json.load(f).get("max_pending_hours", 6))
+                    return float(json.load(f).get(key, default))
             except Exception:
                 pass
-        return 6.0
+        return default
+
+    def _get_max_pending_hours(self) -> float:
+        return self._get_filter_float("max_pending_hours", 6.0)
 
     def submit_tip(
         self,
@@ -62,10 +65,20 @@ class PaperTrader:
         scraper: Any = None
     ) -> Optional[str]:
         """
-        Validates instrument viability for active equity before opening a paper order,
+        Validates Anti-Revenge cooldown & $100 viability gate before opening a paper order,
         captures BEFORE screenshots across H4/H1/M15, and records fund telemetry.
         """
         if tip.direction == "NEUTRAL_NO_TRADE":
+            return None
+
+        # Anti-Revenge Shield: block re-entry within cooldown_hours after SL hit on same symbol
+        cooldown_hours = self._get_filter_float("revenge_cooldown_hours", 2.0)
+        hours_since_loss = self.db.get_hours_since_last_loss(tip.symbol)
+        if hours_since_loss is not None and hours_since_loss < cooldown_hours:
+            logger.warning(
+                f"PaperTrader blocked anti-revenge entry on {tip.symbol}: "
+                f"{hours_since_loss:.2f}h elapsed < {cooldown_hours:.1f}h cooldown"
+            )
             return None
 
         active_scraper = scraper or self.scraper

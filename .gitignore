@@ -6,4 +6,5 @@ __pycache__/
 *.db-journal
 browser_profile/
 data/screenshots/
+knowledge_base/primefx_transcripts/
 .pytest_cache/

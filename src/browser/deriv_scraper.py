@@ -33,6 +33,11 @@ class DerivScraper:
         "CRASH1000": {"tv_code": "CRASH1000", "search": "Crash 1000", "label": "Crash 1000 Index"},
         "STEPINDEX": {"tv_code": "STPRNG", "search": "Step Index 100", "label": "Step Index 100"},
         "STPRNG": {"tv_code": "STPRNG", "search": "Step Index 100", "label": "Step Index 100"},
+        "JD10": {"tv_code": "JD10", "search": "Jump 10", "label": "Jump 10 Index"},
+        "JD25": {"tv_code": "JD25", "search": "Jump 25", "label": "Jump 25 Index"},
+        "JD50": {"tv_code": "JD50", "search": "Jump 50", "label": "Jump 50 Index"},
+        "JD75": {"tv_code": "JD75", "search": "Jump 75", "label": "Jump 75 Index"},
+        "JD100": {"tv_code": "JD100", "search": "Jump 100", "label": "Jump 100 Index"},
     }
 
     # Exact mapping for timeframe UI selection
