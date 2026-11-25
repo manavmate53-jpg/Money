@@ -13,6 +13,7 @@ from src.database.db_manager import DatabaseManager
 from src.risk.pip_calculator import PipCalculator
 from src.risk.position_sizer import PositionSizer
 from src.technicals.confluence_engine import ConfluenceEngine, TradingTip
+from src.technicals.pattern_memory import PatternMemoryEngine
 from src.browser.ws_interceptor import DerivWsInterceptor
 from src.council.readiness_gate import ReadinessGate
 
@@ -50,7 +51,8 @@ class CapitalAdvisor:
         self.db = db
         self.pip_calc = pip_calc or PipCalculator()
         self.position_sizer = position_sizer or PositionSizer(self.pip_calc)
-        self.confluence = confluence_engine or ConfluenceEngine()
+        self.pattern_memory = PatternMemoryEngine(db=self.db)
+        self.confluence = confluence_engine or ConfluenceEngine(pattern_memory=self.pattern_memory)
         self.ws = ws_interceptor or DerivWsInterceptor(self.db)
         self.gate = readiness_gate or ReadinessGate(self.db)
         self.macro_bias_path = macro_bias_path

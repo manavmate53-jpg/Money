@@ -85,6 +85,24 @@ class PaperTrader:
         b_status = self.bankroll.get_status()
         epoch_num = b_status["epoch_number"]
         total_fund = b_status["active_bankroll"]
+        equity_floor = b_status.get("hard_equity_floor", 60.0)
+
+        # Hard $40 Max-Drawdown ($60.00 equity floor) Circuit Breaker check
+        if self.bankroll.is_drawdown_breaker_active() or total_fund <= equity_floor:
+            logger.warning(
+                f"PaperTrader blocked order on {tip.symbol}: DRAWDOWN_CIRCUIT_BREAKER active "
+                f"(equity=${total_fund:.2f} vs floor=${equity_floor:.2f})"
+            )
+            return None
+
+        # Enforce max 1 concurrent open trade on $100 small accounts
+        max_concurrent = self.bankroll.get_max_concurrent_positions(total_fund)
+        if len(self.db.get_active_trades()) >= max_concurrent:
+            logger.warning(
+                f"PaperTrader blocked order on {tip.symbol}: max concurrent positions ({max_concurrent}) reached"
+            )
+            return None
+
         entry_ref = tip.entry_max if tip.direction == "BULLISH" else tip.entry_min
 
         # Strict Small-Account Viability Gate inside paper execution
@@ -153,6 +171,8 @@ class PaperTrader:
         }
 
         self.db.record_active_trade(trade_record)
+        if getattr(tip, "feature_vector", None):
+            self.db.set_kv(f"trade_features:{trade_id}", list(tip.feature_vector))
 
         with self.db.get_connection() as conn:
             conn.execute("""

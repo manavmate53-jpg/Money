@@ -20,6 +20,7 @@ from src.technicals.supply_demand import SupplyDemandEngine
 from src.technicals.price_action import PriceActionEngine
 from src.technicals.liquidity_engine import LiquidityEngine
 from src.technicals.poi_price_action import PoiPriceActionEngine
+from src.technicals.pattern_memory import PatternMemoryEngine
 from src.simulator.hold_time_estimator import HoldTimeEstimator
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,9 @@ class TradingTip(BaseModel):
     estimated_hold_candles: int
     confluence_reasons: list[str] = Field(default_factory=list)
     champions_rule_match: Optional[str] = None
+    feature_vector: list[float] = Field(default_factory=list)
+    analog_win_rate: Optional[float] = None
+    analog_avg_r: Optional[float] = None
 
 
 class ConfluenceEngine:
@@ -53,6 +57,7 @@ class ConfluenceEngine:
         self,
         weights_path: str = "config/strategy_weights.json",
         filters_path: str = "config/active_filters.json",
+        pattern_memory: Optional[PatternMemoryEngine] = None,
     ):
         self.weights_path = weights_path
         self.filters_path = filters_path
@@ -62,6 +67,14 @@ class ConfluenceEngine:
         self.liq = LiquidityEngine()
         self.poi_engine = PoiPriceActionEngine()
         self.hold_estimator = HoldTimeEstimator()
+        if pattern_memory is not None:
+            self.pattern_memory = pattern_memory
+        else:
+            default_db = None
+            if filters_path == "config/active_filters.json" and os.path.exists("data/trading_state.db"):
+                from src.database.db_manager import DatabaseManager
+                default_db = DatabaseManager("data/trading_state.db")
+            self.pattern_memory = PatternMemoryEngine(db=default_db)
         self.weights = self._load_weights()
         self.active_filters = self._load_filters()
 
@@ -175,6 +188,14 @@ class ConfluenceEngine:
         if m15_df is not None and len(m15_df) >= 10:
             m15_atr = float(self.pa.calculate_atr(m15_df).iloc[-1]) or m15_atr
 
+        # Rule 0: Unpredictable Move Volatility Circuit Breaker (VOLATILITY_SHOCK_PAUSE for 2 H1 bars)
+        shock = self.pattern_memory.check_volatility_circuit_breaker(symbol, df)
+        if shock["paused"]:
+            return self._neutral_tip(
+                symbol, regime, current_price, atr_14,
+                [str(shock["reason"])]
+            )
+
         # Rule 1: Anti-Revenge Cooldown check (block same symbol for 2h after SL hit)
         cooldown_h = float(self.active_filters.get("revenge_cooldown_hours", 2.0))
         if hours_since_last_loss is not None and hours_since_last_loss < cooldown_h:
@@ -191,11 +212,12 @@ class ConfluenceEngine:
                 [f"Council Filter: Regime '{regime}' blocked for {symbol} by active_filters.json"]
             )
 
-        # Run Liquidity & Multi-TF POI Engines
+        # Run Liquidity & Multi-TF POI Engines + M15 Market Structure Shift (body close)
         liq_res = self.liq.analyze(df, df_h4=h4_df, df_d1=d1_df, df_m15=m15_df)
         poi_res = self.poi_engine.analyze(df, df_h4=h4_df, df_m15=m15_df)
         sd_res = self.sd.analyze(df)
         smc_res = self.smc.analyze(df)
+        m15_smc = self.smc.analyze(m15_df) if (m15_df is not None and len(m15_df) >= 20) else None
 
         weights = self.get_instrument_weights(symbol, regime)
         min_confirm = int(self._get_symbol_filter_val(symbol, "min_sweep_confirmation_candles", 2))
@@ -242,6 +264,16 @@ class ConfluenceEngine:
             elif smc_trend == "BEARISH":
                 bearish_score += 0.6 * w_smc
                 reasons.append("Structure: Bearish LL/LH structure progression")
+
+        # 1b. M15 Execution Market Structure Shift (MSS on candle body close)
+        if m15_smc is not None:
+            m15_mss = m15_smc["structure"].get("mss")
+            if m15_mss and m15_mss.get("type") == "BULLISH_MSS":
+                bullish_score += 0.35 * w_smc
+                reasons.append(f"M15 MSS: Bullish body close shift above {m15_mss['level']:.2f}")
+            elif m15_mss and m15_mss.get("type") == "BEARISH_MSS":
+                bearish_score += 0.35 * w_smc
+                reasons.append(f"M15 MSS: Bearish body close shift below {m15_mss['level']:.2f}")
 
         # 2. PrimeFX Multi-Timeframe POI & Inducement Gate (OB / FVG / IFVG / Breaker + S&D)
         w_sd = weights["SUPPLY_DEMAND"]
@@ -431,6 +463,27 @@ class ConfluenceEngine:
             reasons.append(f"Filter: Planned R:R {rr:.2f} below active_filters min_rr_ratio {min_rr:.2f}")
             return self._neutral_tip(symbol, regime, current_price, atr_14, reasons)
 
+        # Rule 6: k-NN Historical Analog Pattern Memory Gate
+        chosen_sweep = bull_sweep if direction == "BULLISH" else bear_sweep
+        chosen_poi = best_bull_poi if direction == "BULLISH" else best_bear_poi
+        f_vec = self.pattern_memory.extract_feature_vector(
+            df_h1=df,
+            direction=direction,
+            htf_trend=macro_bias or smc_trend,
+            sweep_info=chosen_sweep,
+            poi_info=chosen_poi,
+            planned_rr=rr,
+        )
+        sim_eval = self.pattern_memory.evaluate_similarity(f_vec, symbol=symbol)
+        if not sim_eval["passed"]:
+            reasons.append(str(sim_eval["reason"]))
+            return self._neutral_tip(symbol, regime, current_price, atr_14, reasons)
+        if sim_eval["k_neighbors"] > 0:
+            reasons.append(
+                f"k-NN Analogs (k={sim_eval['k_neighbors']}): {sim_eval['analog_win_rate']*100:.1f}% win rate, "
+                f"{sim_eval['analog_avg_r']:+.2f}R avg"
+            )
+
         hold_est = self.hold_estimator.estimate_hold_time(
             entry_price=entry_ref,
             tp_price=tp1,
@@ -458,5 +511,8 @@ class ConfluenceEngine:
             estimated_hold_hours=hold_est["estimated_hours"],
             estimated_hold_candles=hold_est["estimated_candles"],
             confluence_reasons=reasons,
-            champions_rule_match=champions_match or "PrimeFX Pure Price-Action + Liquidity Playbook"
+            champions_rule_match=champions_match or "PrimeFX Pure Price-Action + Liquidity Playbook",
+            feature_vector=f_vec,
+            analog_win_rate=sim_eval["analog_win_rate"],
+            analog_avg_r=sim_eval["analog_avg_r"],
         )

@@ -1,5 +1,7 @@
 {
   "sandbox_starting_capital": 100.0,
+  "max_drawdown_dollars": 40.0,
+  "hard_equity_floor": 60.0,
   "sandbox_bankruptcy_threshold": 15.0,
   "sandbox_auto_reset": true,
   "training_risk_percent_range": [1.0, 4.0],

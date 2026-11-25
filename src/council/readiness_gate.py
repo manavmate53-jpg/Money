@@ -193,7 +193,7 @@ class ReadinessGate:
 - **Active Trading Bankroll**: **`${m['active_bankroll']:.2f}`**
 - **Locked Profit Vault ("Profit Brought Home")**: **`${m['total_vaulted_profit']:.2f}`**
 - **Total Combined Capital**: **`${m['active_bankroll'] + m['total_vaulted_profit']:.2f}`**
-- **Current Simulation Epoch**: `#{m['simulation_epochs']}` (Auto-reset sandbox on equity $< \$15.00$)
+- **Current Simulation Epoch**: `#{m['simulation_epochs']}` (Auto-reset on $\le \$60.00$ equity / $\$40$ Max-Drawdown Shield)
 
 ---
 

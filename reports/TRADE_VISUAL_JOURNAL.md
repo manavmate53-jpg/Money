@@ -1,5 +1,5 @@
 # 🖼️ TRADE VISUAL PROGRESS JOURNAL (BEFORE VS. AFTER AUDIT)
-*Side-by-side visual chart gallery rendered across all timeframes (H4, H1, M15) | Refreshed: 2026-11-25 10:37:13 UTC*
+*Side-by-side visual chart gallery rendered across all timeframes (H4, H1, M15) | Refreshed: 2026-11-25 19:08:00 UTC*
 
 ## Trade `TRD-20261122160735-1HZ7`: **1HZ75V** — BULLISH (LOSS 🔴 -$1.30 / -1.00R)
 - **Strategy**: `SMC_ICT` | **Hold**: `45.4 hrs`

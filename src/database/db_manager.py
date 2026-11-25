@@ -213,6 +213,34 @@ class DatabaseManager:
                 updated_at TEXT NOT NULL
             );
             """)
+
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pattern_analogs (
+                analog_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                features_json TEXT NOT NULL,
+                outcome_r REAL NOT NULL,
+                is_win INTEGER NOT NULL,
+                source TEXT NOT NULL
+            );
+            """)
+
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS candles (
+                symbol TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                epoch INTEGER NOT NULL,
+                open REAL NOT NULL,
+                high REAL NOT NULL,
+                low REAL NOT NULL,
+                close REAL NOT NULL,
+                volume REAL NOT NULL,
+                PRIMARY KEY (symbol, timeframe, epoch)
+            );
+            """)
             conn.commit()
 
     def set_kv(self, key: str, value: Any):
@@ -376,6 +404,81 @@ class DatabaseManager:
                 ORDER BY closed_at ASC
                 """)
             return [dict(r) for r in cursor.fetchall()]
+
+    def add_pattern_analog(self, analog: Dict[str, Any]) -> int:
+        """Inserts a single normalized 8-feature setup analog row."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT INTO pattern_analogs (
+                symbol, timeframe, direction, timestamp,
+                features_json, outcome_r, is_win, source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                analog["symbol"],
+                analog.get("timeframe", "H1"),
+                analog["direction"],
+                analog["timestamp"],
+                json.dumps(analog["features"]),
+                float(analog["outcome_r"]),
+                int(analog["is_win"]),
+                analog.get("source", "PAPER_TRADE"),
+            ))
+            conn.commit()
+            return cursor.lastrowid
+
+    def bulk_add_pattern_analogs(self, analogs: List[Dict[str, Any]]) -> int:
+        """Bulk-inserts walk-forward historical analogs cleanly."""
+        if not analogs:
+            return 0
+        rows = [
+            (
+                a["symbol"],
+                a.get("timeframe", "H1"),
+                a["direction"],
+                a["timestamp"],
+                json.dumps(a["features"]),
+                float(a["outcome_r"]),
+                int(a["is_win"]),
+                a.get("source", "WALK_FORWARD_90D"),
+            )
+            for a in analogs
+        ]
+        with self.get_connection() as conn:
+            conn.executemany("""
+            INSERT INTO pattern_analogs (
+                symbol, timeframe, direction, timestamp,
+                features_json, outcome_r, is_win, source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, rows)
+            conn.commit()
+        return len(rows)
+
+    def clear_pattern_analogs(self, source: Optional[str] = None):
+        with self.get_connection() as conn:
+            if source:
+                conn.execute("DELETE FROM pattern_analogs WHERE source = ?", (source,))
+            else:
+                conn.execute("DELETE FROM pattern_analogs")
+            conn.commit()
+
+    def get_pattern_analogs(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Loads stored historical pattern analogs for k-NN Euclidean lookup."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            if symbol:
+                cursor.execute("SELECT * FROM pattern_analogs WHERE symbol = ?", (symbol,))
+            else:
+                cursor.execute("SELECT * FROM pattern_analogs")
+            results = []
+            for row in cursor.fetchall():
+                d = dict(row)
+                try:
+                    d["features"] = json.loads(d["features_json"])
+                    results.append(d)
+                except Exception:
+                    continue
+            return results
 
     def get_active_epoch_info(self) -> Dict[str, Any]:
         """Returns the latest active simulation epoch metadata."""

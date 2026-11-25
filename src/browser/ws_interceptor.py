@@ -62,7 +62,13 @@ class DerivWsInterceptor:
     def resolve_ws_symbol(self, symbol: str) -> str:
         return self.WS_SYMBOL_MAP.get(symbol.upper(), symbol)
 
-    async def fetch_candles_ws(self, symbol: str, timeframe: str = "H1", count: int = 300) -> Optional[pd.DataFrame]:
+    async def fetch_candles_ws(
+        self,
+        symbol: str,
+        timeframe: str = "H1",
+        count: int = 300,
+        end_epoch: Any = "latest",
+    ) -> Optional[pd.DataFrame]:
         """
         Queries Deriv WebSocket API ticks_history for exact historical candles.
         Tries modern api-core.deriv.com endpoint first, then legacy derivws endpoint.
@@ -73,7 +79,7 @@ class DerivWsInterceptor:
             "ticks_history": ws_symbol,
             "adjust_start_time": 1,
             "count": count,
-            "end": "latest",
+            "end": end_epoch,
             "start": 1,
             "style": "candles",
             "granularity": granularity
@@ -225,3 +231,38 @@ class DerivWsInterceptor:
             self._candle_cache[cache_key] = (now_ts, df)
             return df.copy()
         return self.generate_synthetic_candles(symbol, timeframe, count)
+
+    async def fetch_historical_candles_days(
+        self,
+        symbol: str,
+        timeframe: str = "H1",
+        days: int = 90,
+    ) -> pd.DataFrame:
+        """
+        Fetches >= `days` calendar days of real OHLC candles (paginating backward
+        beyond Deriv's single-call bar cap if needed) for walk-forward k-NN seeding.
+        """
+        granularity = self.TIMEFRAME_GRANULARITY.get(timeframe.upper(), 3600)
+        target_bars = max(150, int((days * 86400) / granularity))
+        chunks: List[pd.DataFrame] = []
+        end_cursor: Any = "latest"
+        remaining = target_bars
+
+        while remaining > 0 and len(chunks) < 6:
+            batch_cnt = min(2000, remaining)
+            part = await self.fetch_candles_ws(symbol, timeframe=timeframe, count=batch_cnt, end_epoch=end_cursor)
+            if part is None or len(part) == 0:
+                break
+            chunks.append(part)
+            oldest_epoch = int(part["epoch"].min())
+            end_cursor = oldest_epoch - 1
+            remaining -= len(part)
+            if len(part) < batch_cnt:
+                break
+
+        if not chunks:
+            return self.generate_synthetic_candles(symbol, timeframe=timeframe, count=target_bars)
+
+        combined = pd.concat(chunks, ignore_index=True)
+        combined = combined.drop_duplicates(subset=["epoch"]).sort_values("epoch").reset_index(drop=True)
+        return combined

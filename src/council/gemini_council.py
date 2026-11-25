@@ -53,7 +53,7 @@ TacticalSniperSchema = TradeValidationSchema
 
 class StrategyWeightDelta(BaseModel):
     strategy_name: str = Field(description="Exact framework name: SMC_ICT, SUPPLY_DEMAND, or PRICE_ACTION")
-    delta: float = Field(description="Suggested Bayesian weight delta between -0.05 and +0.05")
+    delta: float = Field(description="Gentle Speed-1 Bayesian weight nudge between -0.02 and +0.02")
     reason: str = Field(description="Concise rationale linking outcome to strategy adjustment")
 
 
@@ -81,7 +81,10 @@ class GeminiCouncil:
         self._unavailable_models: set[str] = set()
         if GENAI_AVAILABLE and self.api_key:
             try:
-                self.client = genai.Client(api_key=self.api_key)
+                self.client = genai.Client(
+                    api_key=self.api_key,
+                    http_options=types.HttpOptions(timeout=45000),
+                )
             except Exception as e:
                 logger.error(f"Failed to initialize Gemini Client: {type(e).__name__}: {e}")
                 self.client = None
@@ -107,7 +110,7 @@ class GeminiCouncil:
         model: str,
         contents: list,
         config: Any = None,
-        max_retries: int = 3,
+        max_retries: int = 2,
         fallback_models: Optional[List[str]] = None
     ) -> tuple[Any, str]:
         """
@@ -347,7 +350,7 @@ Trade Telemetry & 5W: {json.dumps(trade_data, default=str)}
                     if isinstance(item, dict) and "strategy_name" in item and "delta" in item
                 }
                 if not weight_adj:
-                    weight_adj = {strategy: 0.03 if outcome == "WIN" else -0.03}
+                    weight_adj = {strategy: 0.02 if outcome == "WIN" else -0.02}
 
                 self._append_to_notes(symbol, outcome, pnl, r_mult, strategy, diagnosis, criticism, mutation, used_model)
                 return {
@@ -376,14 +379,14 @@ Trade Telemetry & 5W: {json.dumps(trade_data, default=str)}
             edge_cls = "PRIMEFX_SWEEP_POI_WIN"
             flaw_cls = "NONE"
             mutation = f"Reinforce {strategy} weighting on {symbol} during current regime."
-            weight_adj = {strategy: 0.03}
+            weight_adj = {strategy: 0.02}
         else:
             diagnosis = f"Structural invalidation: Price wicked into unmitigated pool before reversing on {symbol}."
             criticism = "Risk alert: Entry occurred too early without waiting for IDM sweep & 2-candle confirmation."
             edge_cls = "PRE_IDM_UNCONFIRMED"
             flaw_cls = "PRE_INDUCEMENT_TRAP"
             mutation = f"Require IDM sweep + minimum 2-candle confirmation and enforce 2h cooldown on {symbol}."
-            weight_adj = {strategy: -0.03}
+            weight_adj = {strategy: -0.02}
 
         self._append_to_notes(symbol, outcome, pnl, r_mult, strategy, diagnosis, criticism, mutation, "heuristic_fallback")
 

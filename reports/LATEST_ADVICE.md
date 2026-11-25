@@ -1,11 +1,11 @@
 # 🏛 CAPITAL ADVISOR — $100 LIVE EXECUTION BLUEPRINT
 *Auto-updated every hour by the Execution & Risk Desk (`hourly_execution_desk.yml`)*  
-*Last Refresh: **2026-11-25 10:37:12 UTC***
+*Last Refresh: **2026-11-25 19:08:00 UTC***
 
 ---
 
 ## 📊 1. 30-DAY CALIBRATION & VAULT SCOREBOARD
-- **Readiness State**: `TRAINING_CALIBRATION (Day 4/30)`
+- **Readiness State**: `TRAINING_CALIBRATION (Day 5/30)`
 - **Simulation Epoch**: `#1`
 - **Resolved Sample**: `1` trades (`0W / 1L`)
 - **Rolling Win Rate**: **0.0%**
@@ -17,35 +17,35 @@
 ---
 
 ## 🎯 2. #1 RECOMMENDED INSTRUMENT
-- **Instrument**: **`JD100`** *(Ranked #1 for $100 capital)*
-- **Directional Bias**: **BEARISH**
+- **Instrument**: **`STEPINDEX`** *(Ranked #1 for $100 capital)*
+- **Directional Bias**: **BULLISH**
 - **Market Regime**: `DIRECTIONAL_TREND`
 - **Primary Strategy**: `SMC_ICT`
-- **Champion Rule Alignment**: *Emir Gams: Strict Bearish One-Time Framing (LL+LH+LC)*
+- **Champion Rule Alignment**: *PrimeFX Liquidity Raid: PDL Swept + 4-Bar Hold*
 
 ---
 
 ## 🎫 3. EXACT EXECUTION TICKET
 | Parameter | Exact Value | Notes |
 | :--- | :--- | :--- |
-| **Recommended Lot Size** | **`0.51 lots`** | Granular nano-lot execution |
+| **Recommended Lot Size** | **`0.15 lots`** | Granular nano-lot execution |
 | **Dollar Risk ($)** | **`$1.49`** | **1.49%** of $100 equity |
-| **Required Margin** | `$0.03` | Leverage 1:1000 |
-| **Entry Zone** | **`49.51 - 51.92`** | Structural ATR-calibrated entry band |
-| **Stop Loss (SL)** | **`52.43`** | 2.92 points distance |
-| **Take Profit 1 (TP1)** | **`42.21`** | Planned R:R: **1:2.5** |
-| **Take Profit 2 (TP2)** | **`37.83`** | Major liquidity pool |
-| **Cover-Risk-to-Zero** | **`46.59 (+1.0R displacement)`** | Ratchet SL to Break-Even at $+1.0R$ |
-| **Estimated Hold Time** | **6.0 hours (6 bars)** | Based on $\text{ATR}_{14}$ velocity |
+| **Required Margin** | `$1.10` | Leverage 1:1000 |
+| **Entry Zone** | **`7352.00 - 7355.50`** | Structural ATR-calibrated entry band |
+| **Stop Loss (SL)** | **`7345.57`** | 9.93 points distance |
+| **Take Profit 1 (TP1)** | **`7380.33`** | Planned R:R: **1:2.5** |
+| **Take Profit 2 (TP2)** | **`7385.20`** | Major liquidity pool |
+| **Cover-Risk-to-Zero** | **`7365.43 (+1.0R displacement)`** | Ratchet SL to Break-Even at $+1.0R$ |
+| **Estimated Hold Time** | **2.1 hours (2 bars)** | Based on $\text{ATR}_{14}$ velocity |
 
 ---
 
 ## 🔍 4. CONFLUENCE SIGNALS
-- Structure: Bearish LL/LH structure progression
-- POI: H4 BULLISH_IFVG [46.27-47.58] (IDM_SWEPT_CONFIRMED)
-- POI: H4 BEARISH_BREAKER [49.51-51.92] (CLEAR_DIRECT_POI)
-- Price Action: Strict Bearish One-Time Framing (LL+LH+LC)
-- Pure PA: Support-to-Resistance polarity flip @ 48.59
+- Liquidity: PDL swept at 7352.70 (4-candle hold)
+- POI: H1 BULLISH_IFVG [7352.00-7355.50] (IDM_SWEPT_CONFIRMED)
+- POI: H4 BEARISH_IFVG [7365.40-7365.50] (NO_IDM_NEEDED)
+- Pure PA: Support-to-Resistance polarity flip @ 7354.90
+- k-NN Analogs (k=20): 45.0% win rate, +0.57R avg
 
 ---
 
@@ -54,11 +54,7 @@
 
 
 ### Why Other Indices Were Disqualified on $100 Capital
-- **1HZ50V**: DISQUALIFIED_ON_$100: Minimum lot 0.005 on 1HZ50V with 2826.37 pt SL risks $14.13 (14.1%), exceeding $2.00 hard cap.
-- **1HZ100V**: DISQUALIFIED_ON_$100: Minimum lot 0.2 on 1HZ100V with 60.87 pt SL risks $12.17 (12.2%), exceeding $2.00 hard cap.
-- **JD10**: DISQUALIFIED_ON_$100: Minimum lot 0.01 on JD10 with 502.77 pt SL risks $5.03 (5.0%), exceeding $2.00 hard cap.
-- **JD25**: DISQUALIFIED_ON_$100: Minimum lot 0.01 on JD25 with 1091.84 pt SL risks $10.92 (10.9%), exceeding $2.00 hard cap.
-- **JD50**: DISQUALIFIED_ON_$100: Minimum lot 0.01 on JD50 with 1181.63 pt SL risks $11.82 (11.8%), exceeding $2.00 hard cap.
-- **R_75**: DISQUALIFIED_ON_$100: Minimum lot 0.01 on R_75 with 561.31 pt SL risks $5.61 (5.6%), exceeding $2.00 hard cap.
-- **BOOM1000**: DISQUALIFIED_ON_$100: Minimum lot 0.2 on BOOM1000 with 48.67 pt SL risks $9.73 (9.7%), exceeding $2.00 hard cap.
+- **1HZ100V**: DISQUALIFIED_ON_$100: Minimum lot 0.2 on 1HZ100V with 40.85 pt SL risks $8.17 (8.2%), exceeding $2.00 hard cap.
+- **JD25**: DISQUALIFIED_ON_$100: Minimum lot 0.01 on JD25 with 1113.61 pt SL risks $11.14 (11.1%), exceeding $2.00 hard cap.
+- **CRASH1000**: DISQUALIFIED_ON_$100: Minimum lot 0.2 on CRASH1000 with 64.82 pt SL risks $12.96 (13.0%), exceeding $2.00 hard cap.
 

@@ -23,8 +23,11 @@ class BankrollManager:
                 return json.load(f)
         return {
             "sandbox_starting_capital": 100.0,
+            "max_drawdown_dollars": 40.0,
+            "hard_equity_floor": 60.0,
             "sandbox_bankruptcy_threshold": 15.0,
-            "sandbox_auto_reset": true,
+            "sandbox_auto_reset": True,
+            "max_concurrent_positions_small_account": 1,
             "profit_lock_vault": {
                 "enabled": True,
                 "growth_trigger_percent": 20.0,
@@ -32,6 +35,24 @@ class BankrollManager:
                 "compound_reinvest_percent": 50.0
             }
         }
+
+    def get_equity_floor(self) -> float:
+        """Returns the hard $60.00 ($40 max-drawdown on $100 start) equity protection floor."""
+        starting_cap = float(self.policy.get("sandbox_starting_capital", 100.0))
+        max_dd = float(self.policy.get("max_drawdown_dollars", 40.0))
+        return float(self.policy.get("hard_equity_floor", max(0.0, starting_cap - max_dd)))
+
+    def is_drawdown_breaker_active(self) -> bool:
+        return bool(self.db.get_kv("drawdown_circuit_breaker_active", False))
+
+    def clear_drawdown_breaker(self):
+        self.db.set_kv("drawdown_circuit_breaker_active", False)
+
+    def get_max_concurrent_positions(self, capital: Optional[float] = None) -> int:
+        equity = float(capital) if capital is not None else float(self.db.get_kv("active_bankroll", 100.0))
+        if equity <= 250.0:
+            return int(self.policy.get("max_concurrent_positions_small_account", 1))
+        return 3
 
     def _sync_state(self):
         """Initializes or loads active bankroll, vault balance, and current epoch."""
@@ -68,15 +89,20 @@ class BankrollManager:
             "vault_balance": float(self.db.get_kv("vault_balance", 0.0)),
             "total_accumulated_capital": float(self.db.get_kv("active_bankroll", 100.0)) + float(self.db.get_kv("vault_balance", 0.0)),
             "base_watermark": float(self.db.get_kv("epoch_base_watermark", 100.0)),
-            "bankruptcy_threshold": self.policy.get("sandbox_bankruptcy_threshold", 15.0)
+            "bankruptcy_threshold": self.policy.get("sandbox_bankruptcy_threshold", 15.0),
+            "hard_equity_floor": self.get_equity_floor(),
+            "max_drawdown_dollars": float(self.policy.get("max_drawdown_dollars", 40.0)),
+            "drawdown_breaker_active": self.is_drawdown_breaker_active(),
+            "max_concurrent_positions": self.get_max_concurrent_positions(),
         }
 
     def process_trade_result(self, dollar_pnl: float, r_multiple: float, symbol: str) -> Dict[str, Any]:
         """
         Updates bankroll after a trade closes.
         Handles:
-        1. Bankruptcy detection & auto-reset.
-        2. Two-Bucket Profit-Lock Vault sweeping (+20% milestone).
+        1. $40 Max-Drawdown ($60.00 hard equity floor) DRAWDOWN_CIRCUIT_BREAKER + Council review.
+        2. Sandbox bankruptcy auto-reset (<= $15.00).
+        3. Two-Bucket Profit-Lock Vault sweeping (+20% milestone).
         """
         current_bankroll = float(self.db.get_kv("active_bankroll", 100.0))
         vault_balance = float(self.db.get_kv("vault_balance", 0.0))
@@ -84,12 +110,13 @@ class BankrollManager:
         base_watermark = float(self.db.get_kv("epoch_base_watermark", 100.0))
 
         new_bankroll = round(current_bankroll + dollar_pnl, 2)
-        bankruptcy_threshold = self.policy.get("sandbox_bankruptcy_threshold", 15.0)
+        bankruptcy_threshold = float(self.policy.get("sandbox_bankruptcy_threshold", 15.0))
+        equity_floor = self.get_equity_floor()
+        max_dd_dollars = float(self.policy.get("max_drawdown_dollars", 40.0))
 
-        # Check bankruptcy in training sandbox
+        # Check legacy extreme bankruptcy threshold first (keeps epoch reset contract intact)
         if new_bankroll <= bankruptcy_threshold and self.policy.get("sandbox_auto_reset", True):
             now = datetime.now(timezone.utc).isoformat()
-            # Mark current epoch as BANKRUPT
             with self.db.get_connection() as conn:
                 conn.execute("""
                 UPDATE simulation_epochs
@@ -98,9 +125,16 @@ class BankrollManager:
                 """, (now, new_bankroll, f"Equity breached ${bankruptcy_threshold:.2f} threshold on {symbol}", epoch_num))
                 conn.commit()
 
-            # Start new epoch
+            self.db.log_council_note(
+                symbol=symbol,
+                outcome="LOSS",
+                diagnosis=f"EPOCH_RESET_BANKRUPTCY at ${new_bankroll:.2f} (<= ${bankruptcy_threshold:.2f})",
+                criticism=f"Catastrophic balance exhaustion during Epoch #{epoch_num} on {symbol}",
+                mutation="Reset sandbox epoch to $100.00 while preserving Locked Profit Vault.",
+            )
+
             next_epoch = epoch_num + 1
-            starting_cap = self.policy.get("sandbox_starting_capital", 100.0)
+            starting_cap = float(self.policy.get("sandbox_starting_capital", 100.0))
             self.db.set_kv("epoch_number", next_epoch)
             self.db.set_kv("active_bankroll", starting_cap)
             self.db.set_kv("epoch_base_watermark", starting_cap)
@@ -113,6 +147,71 @@ class BankrollManager:
                 "final_balance": new_bankroll,
                 "reset_bankroll": starting_cap,
                 "vault_preserved": vault_balance,
+                "circuit_breaker_triggered": True,
+                "symbol": symbol,
+                "pnl": dollar_pnl
+            }
+
+        # Check $40 Max-Drawdown ($60.00 Hard Equity Floor) Circuit Breaker
+        if new_bankroll <= equity_floor:
+            now = datetime.now(timezone.utc).isoformat()
+            self.db.set_kv("drawdown_circuit_breaker_active", True)
+            self.db.set_kv("drawdown_breaker_details", {
+                "timestamp": now,
+                "epoch": epoch_num,
+                "final_balance": new_bankroll,
+                "equity_floor": equity_floor,
+                "symbol": symbol,
+            })
+            self.db.log_council_note(
+                symbol=symbol,
+                outcome="LOSS",
+                diagnosis=f"DRAWDOWN_CIRCUIT_BREAKER triggered at ${new_bankroll:.2f} (<= ${equity_floor:.2f} floor / ${max_dd_dollars:.2f} max drawdown)",
+                criticism=f"Account reached ${equity_floor:.2f} hard drawdown shield during Epoch #{epoch_num} on {symbol}. Trading paused pending Council audit.",
+                mutation="Enforce DRAWDOWN_CIRCUIT_BREAKER pause, audit losing cluster, and cap active risk <= $1.50 (1 concurrent position).",
+            )
+
+            if self.policy.get("sandbox_auto_reset", True):
+                with self.db.get_connection() as conn:
+                    conn.execute("""
+                    UPDATE simulation_epochs
+                    SET end_time = ?, final_balance = ?, status = 'DRAWDOWN_BREAKER', reason = ?
+                    WHERE epoch_number = ? AND status = 'ACTIVE'
+                    """, (now, new_bankroll, f"$40 max drawdown (${equity_floor:.2f} floor) breached on {symbol}", epoch_num))
+                    conn.commit()
+
+                next_epoch = epoch_num + 1
+                starting_cap = float(self.policy.get("sandbox_starting_capital", 100.0))
+                self.db.set_kv("epoch_number", next_epoch)
+                self.db.set_kv("active_bankroll", starting_cap)
+                self.db.set_kv("epoch_base_watermark", starting_cap)
+                self._record_epoch_start(next_epoch, starting_cap)
+
+                return {
+                    "event": "DRAWDOWN_CIRCUIT_BREAKER",
+                    "pause_trading": True,
+                    "council_review_logged": True,
+                    "old_epoch": epoch_num,
+                    "new_epoch": next_epoch,
+                    "final_balance": new_bankroll,
+                    "reset_bankroll": starting_cap,
+                    "vault_preserved": vault_balance,
+                    "equity_floor": equity_floor,
+                    "max_drawdown_dollars": max_dd_dollars,
+                    "symbol": symbol,
+                    "pnl": dollar_pnl
+                }
+
+            self.db.set_kv("active_bankroll", new_bankroll)
+            return {
+                "event": "DRAWDOWN_CIRCUIT_BREAKER",
+                "pause_trading": True,
+                "council_review_logged": True,
+                "old_epoch": epoch_num,
+                "final_balance": new_bankroll,
+                "vault_preserved": vault_balance,
+                "equity_floor": equity_floor,
+                "max_drawdown_dollars": max_dd_dollars,
                 "symbol": symbol,
                 "pnl": dollar_pnl
             }

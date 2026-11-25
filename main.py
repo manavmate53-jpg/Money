@@ -39,6 +39,7 @@ from src.technicals.supply_demand import SupplyDemandEngine
 from src.technicals.price_action import PriceActionEngine
 from src.technicals.liquidity_engine import LiquidityEngine
 from src.technicals.poi_price_action import PoiPriceActionEngine
+from src.technicals.pattern_memory import PatternMemoryEngine
 from src.browser.deriv_scraper import DerivScraper
 from src.browser.ws_interceptor import DerivWsInterceptor
 from src.simulator.paper_trader import PaperTrader
@@ -78,9 +79,10 @@ def cycle_hourly(dry_run: bool = False, capital: float = 100.0) -> dict:
     pip_calc = PipCalculator()
     bankroll = BankrollManager(db)
     position_sizer = PositionSizer(pip_calc)
-    confluence = ConfluenceEngine()
+    pattern_memory = PatternMemoryEngine(db=db)
+    confluence = ConfluenceEngine(pattern_memory=pattern_memory)
     paper_trader = PaperTrader(db, bankroll, pip_calc, position_sizer=position_sizer)
-    post_mortem = PostMortemManager(db)
+    post_mortem = PostMortemManager(db, pattern_memory=pattern_memory)
     scraper = DerivScraper()
     ws = DerivWsInterceptor(db)
     advisor = CapitalAdvisor(db)
@@ -98,92 +100,93 @@ def cycle_hourly(dry_run: bool = False, capital: float = 100.0) -> dict:
     symbols = ["STEPINDEX", "JD75", "JD100", "1HZ25V", "1HZ50V", "1HZ10V", "1HZ75V", "R_75"]
     results = {"resolved_trades": 0, "expired_trades": 0, "new_trades": 0}
 
-    # First check any lingering active_trades even on symbols outside primary scan loop
-    active_symbols = {t["symbol"] for t in db.get_active_trades()}
-    for extra_sym in sorted(active_symbols - set(symbols)):
-        df_extra = ws.get_candles(extra_sym, timeframe="H1", count=150)
-        resolved_extra = paper_trader.update_open_positions(extra_sym, df_extra, scraper=scraper)
-        for res in resolved_extra:
+    # First resolve/expire ALL open positions across all active symbols BEFORE scanning new entries
+    active_symbols = {t["symbol"] for t in db.get_active_trades()} | set(symbols)
+    for act_sym in sorted(active_symbols):
+        if not any(t["symbol"] == act_sym for t in db.get_active_trades()):
+            continue
+        df_act = ws.get_candles(act_sym, timeframe="H1", count=150)
+        resolved_act = paper_trader.update_open_positions(act_sym, df_act, scraper=scraper)
+        for res in resolved_act:
             if res["outcome"] == "EXPIRED_STALE":
                 results["expired_trades"] += 1
-                console.print(f"[yellow]⏱ Expired Pending Order {res['trade_id']} on {extra_sym}: {escape(res.get('reason', ''))}[/yellow]")
+                console.print(f"[yellow]⏱ Expired Pending Order {res['trade_id']} on {act_sym}: {escape(res.get('reason', ''))}[/yellow]")
             else:
                 results["resolved_trades"] += 1
+                console.print(f"[bold green]✓ Resolved Trade on {act_sym}: {res['outcome']} (${res['realized_pnl']:+.2f} / {res['realized_r']:+.2f}R)[/bold green]")
                 post_mortem.process_resolved_trade(
                     res,
                     before_screenshots=res.get("before_screenshots"),
                     after_screenshots=res.get("after_screenshots")
                 )
 
-    for sym in symbols:
-        df_h1 = ws.get_candles(sym, timeframe="H1", count=150)
-        df_m15 = ws.get_candles(sym, timeframe="M15", count=150)
-        df_h4 = ws.get_candles(sym, timeframe="H4", count=100)
-
-        resolved = paper_trader.update_open_positions(sym, df_h1, scraper=scraper)
-        for res in resolved:
-            if res["outcome"] == "EXPIRED_STALE":
-                results["expired_trades"] += 1
-                console.print(f"[yellow]⏱ Expired Pending Order {res['trade_id']} on {sym}: {escape(res.get('reason', ''))}[/yellow]")
-                continue
-            results["resolved_trades"] += 1
-            console.print(f"[bold green]✓ Resolved Trade on {sym}: {res['outcome']} (${res['realized_pnl']:+.2f} / {res['realized_r']:+.2f}R)[/bold green]")
-            post_mortem.process_resolved_trade(
-                res,
-                before_screenshots=res.get("before_screenshots"),
-                after_screenshots=res.get("after_screenshots")
-            )
-
-        # Avoid stacking duplicate orders on same symbol
-        if any(t["symbol"] == sym for t in db.get_active_trades()):
-            continue
-
-        # Check Macro Alignment, Anti-Revenge Cooldown & Tactical Sniper Entry
-        macro_info = macro_data.get(sym, {})
-        macro_bias = macro_info.get("macro_bias", "NEUTRAL")
-        hours_since_loss = db.get_hours_since_last_loss(sym)
-
-        tip = confluence.generate_tip(
-            sym,
-            df_h1,
-            m15_df=df_m15,
-            h4_df=df_h4,
-            macro_bias=macro_bias,
-            hours_since_last_loss=hours_since_loss,
+    # Avoid stacking duplicate orders on same symbol OR breaching max concurrent cap ($100 = 1 trade)
+    equity_status = bankroll.get_status()
+    if bankroll.is_drawdown_breaker_active() or equity_status["active_bankroll"] <= bankroll.get_equity_floor():
+        console.print(
+            f"[bold red]🛑 DRAWDOWN_CIRCUIT_BREAKER ACTIVE (Equity: ${equity_status['active_bankroll']:.2f} vs "
+            f"${bankroll.get_equity_floor():.2f} floor) — New entries paused until Council review.[/bold red]"
         )
-        if tip.direction != "NEUTRAL_NO_TRADE":
-            equity = bankroll.get_status()["active_bankroll"]
-            entry_p = tip.entry_max if tip.direction == "BULLISH" else tip.entry_min
-            viab = position_sizer.evaluate_instrument_viability(sym, entry_p, tip.stop_loss, equity)
-
-            if not viab["viable"]:
-                console.print(f"  [dim yellow]Filter: {sym} disqualified for ${equity:.0f} capital: {escape(str(viab['rejection_reason']))}[/dim yellow]")
+    else:
+        for sym in symbols:
+            max_concurrent = bankroll.get_max_concurrent_positions(bankroll.get_status()["active_bankroll"])
+            active_now = db.get_active_trades()
+            if len(active_now) >= max_concurrent:
+                console.print(f"  [dim cyan]Risk Shield: Max concurrent open positions ({len(active_now)}/{max_concurrent}) reached; skipping new entries.[/dim cyan]")
+                break
+            if any(t["symbol"] == sym for t in active_now):
                 continue
 
-            tactical = council.validate_tactical_sniper(sym, macro_bias, {
-                "direction": tip.direction,
-                "confidence": tip.confidence_score,
-                "regime": tip.market_regime,
-                "entry_zone": f"{tip.entry_min}-{tip.entry_max}",
-                "sl": tip.stop_loss,
-                "tp1": tip.take_profit_1,
-            })
+            df_h1 = ws.get_candles(sym, timeframe="H1", count=150)
+            df_m15 = ws.get_candles(sym, timeframe="M15", count=150)
+            df_h4 = ws.get_candles(sym, timeframe="H4", count=100)
 
-            if tactical["approved"]:
-                scaled_lot = round(max(viab["min_lot"], viab["recommended_lot"] * tactical["adjusted_lot_multiplier"]), 3)
-                if not dry_run:
-                    trade_id = paper_trader.submit_tip(
-                        tip,
-                        lot_size=scaled_lot,
-                        dollar_risk=viab["actual_dollar_risk"],
-                        margin_req=viab["margin_required"],
-                        scraper=scraper
-                    )
-                    if trade_id:
-                        results["new_trades"] += 1
-                        console.print(f"  [bold green]★ Sniper Entry Placed ({trade_id}): {sym} {tip.direction} | Lot: {scaled_lot} | Risk: ${viab['actual_dollar_risk']:.2f}[/bold green]")
-                else:
-                    console.print(f"  [yellow]★ DRY-RUN Sniper: {sym} {tip.direction} | Lot: {scaled_lot}[/yellow]")
+            # Check Macro Alignment, Anti-Revenge Cooldown & Tactical Sniper Entry
+            macro_info = macro_data.get(sym, {})
+            macro_bias = macro_info.get("macro_bias", "NEUTRAL")
+            hours_since_loss = db.get_hours_since_last_loss(sym)
+
+            tip = confluence.generate_tip(
+                sym,
+                df_h1,
+                m15_df=df_m15,
+                h4_df=df_h4,
+                macro_bias=macro_bias,
+                hours_since_last_loss=hours_since_loss,
+            )
+            if tip.direction != "NEUTRAL_NO_TRADE":
+                equity = bankroll.get_status()["active_bankroll"]
+                entry_p = tip.entry_max if tip.direction == "BULLISH" else tip.entry_min
+                viab = position_sizer.evaluate_instrument_viability(sym, entry_p, tip.stop_loss, equity)
+
+                if not viab["viable"]:
+                    console.print(f"  [dim yellow]Filter: {sym} disqualified for ${equity:.0f} capital: {escape(str(viab['rejection_reason']))}[/dim yellow]")
+                    continue
+
+                tactical = council.validate_tactical_sniper(sym, macro_bias, {
+                    "direction": tip.direction,
+                    "confidence": tip.confidence_score,
+                    "regime": tip.market_regime,
+                    "entry_zone": f"{tip.entry_min}-{tip.entry_max}",
+                    "sl": tip.stop_loss,
+                    "tp1": tip.take_profit_1,
+                })
+
+                if tactical["approved"]:
+                    scaled_lot = round(max(viab["min_lot"], viab["recommended_lot"] * tactical["adjusted_lot_multiplier"]), 3)
+                    if not dry_run:
+                        trade_id = paper_trader.submit_tip(
+                            tip,
+                            lot_size=scaled_lot,
+                            dollar_risk=viab["actual_dollar_risk"],
+                            margin_req=viab["margin_required"],
+                            scraper=scraper
+                        )
+                        if trade_id:
+                            results["new_trades"] += 1
+                            console.print(f"  [bold green]★ Sniper Entry Placed ({trade_id}): {sym} {tip.direction} | Lot: {scaled_lot} | Risk: ${viab['actual_dollar_risk']:.2f}[/bold green]")
+                    else:
+                        console.print(f"  [yellow]★ DRY-RUN Sniper: {sym} {tip.direction} | Lot: {scaled_lot}[/yellow]")
 
     # Refresh reports/LATEST_ADVICE.md
     advice_res = advisor.advise(capital=capital)
@@ -292,7 +295,8 @@ def cycle_council() -> dict:
     db = DatabaseManager()
     bankroll = BankrollManager(db)
     gate = ReadinessGate(db)
-    post_mortem = PostMortemManager(db)
+    pattern_memory = PatternMemoryEngine(db=db)
+    post_mortem = PostMortemManager(db, pattern_memory=pattern_memory)
 
     epoch_info = db.get_active_epoch_info()
     current_epoch = int(epoch_info.get("epoch_number", 1))
@@ -331,6 +335,9 @@ def cycle_council() -> dict:
     # Always evaluate Graduation Gate & regenerate TRAINING_DASHBOARD.md + ledgers
     metrics = gate.evaluate_metrics(write_report=True)
     db.export_all_ledgers()
+    if bankroll.is_drawdown_breaker_active() and bankroll.policy.get("sandbox_auto_reset", True):
+        bankroll.clear_drawdown_breaker()
+        console.print("[yellow]🛡️ Council cleared DRAWDOWN_CIRCUIT_BREAKER after post-mortem review on new sandbox epoch.[/yellow]")
     b_stat = bankroll.get_status()
 
     console.print(f"[bold green]✓ Graduation Gate Evaluated: {metrics['status']} ({metrics['total_trades']} resolved trades)[/bold green]")

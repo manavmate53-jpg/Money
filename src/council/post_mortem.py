@@ -22,6 +22,8 @@ class PostMortemManager:
         weights_path: str = "config/strategy_weights.json",
         filters_path: str = "config/active_filters.json",
         reports_dir: str = "reports",
+        filter_mutation_batch_size: int = 5,
+        pattern_memory: Any = None,
     ):
         self.db = db
         self.council = council or GeminiCouncil()
@@ -29,6 +31,8 @@ class PostMortemManager:
         self.weights_path = weights_path
         self.filters_path = filters_path
         self.reports_dir = reports_dir
+        self.filter_mutation_batch_size = max(1, int(filter_mutation_batch_size))
+        self.pattern_memory = pattern_memory
 
     def process_resolved_trade(
         self,
@@ -93,10 +97,11 @@ class PostMortemManager:
             """, (what_improved, f"{diagnosis} | {criticism}", t_id))
             conn.commit()
 
-        # 4. Write machine-enforceable rules into config/active_filters.json
-        self._update_active_filters(symbol=symbol, trade_id=t_id, outcome=outcome, review=council_review)
+        # 4. Speed 2: Evaluate Batch Hard-Filter Mutation (mutates hard rules only at n >= 5 trades)
+        hard_mutated = self._update_active_filters(symbol=symbol, trade_id=t_id, outcome=outcome, review=council_review)
+        council_review["hard_filter_mutated"] = hard_mutated
 
-        # 5. Mutate Bayesian Strategy Weights
+        # 5. Speed 1: Gentle immediate Bayesian Strategy Weight Nudge (±0.02)
         self._mutate_weights(
             symbol=symbol,
             strategy=strat,
@@ -104,6 +109,18 @@ class PostMortemManager:
             r_multiple=r_mult,
             suggested_deltas=council_review.get("weight_adjustment")
         )
+        council_review["weight_nudge_cap"] = 0.02
+
+        # 5b. Continuously append closed trade vector into k-NN Pattern Memory (if tracked)
+        if t_id and self.pattern_memory is not None:
+            saved_feats = self.db.get_kv(f"trade_features:{t_id}")
+            if isinstance(saved_feats, list) and len(saved_feats) == 8:
+                self.pattern_memory.record_resolved_trade(
+                    symbol=symbol,
+                    direction=trade_result.get("direction", "BULLISH"),
+                    feature_vector=saved_feats,
+                    outcome_r=r_mult,
+                )
 
         # 6. Re-run 1,000-Path Monte Carlo Permutation Check
         all_r: List[float] = []
@@ -121,14 +138,19 @@ class PostMortemManager:
 
         return council_review
 
-    def _update_active_filters(self, symbol: str, trade_id: str, outcome: str, review: Dict[str, Any]):
-        """Persists structured machine-enforced parameters to config/active_filters.json."""
+    def _update_active_filters(self, symbol: str, trade_id: str, outcome: str, review: Dict[str, Any]) -> bool:
+        """
+        Two-Speed Learning — Speed 2:
+        Accumulates resolved trade telemetry per symbol and mutates hard entry filters in
+        config/active_filters.json ONLY once `n >= filter_mutation_batch_size` (default 5) trades
+        have accrued since the last filter update, preventing CSPRNG noise overfitting.
+        """
         if not self.filters_path:
-            return
+            return False
         os.makedirs(os.path.dirname(os.path.abspath(self.filters_path)), exist_ok=True)
 
         data: Dict[str, Any] = {
-            "version": "1.0.0",
+            "version": "2.0.0",
             "min_sweep_confirmation_candles": 2,
             "max_pending_hours": 6,
             "min_rr_ratio": 2.0,
@@ -137,6 +159,7 @@ class PostMortemManager:
             "require_macro_bias_alignment": True,
             "blocked_regimes_by_symbol": {},
             "symbol_overrides": {},
+            "filter_mutation_state": {},
             "recent_mutations": []
         }
         if os.path.exists(self.filters_path):
@@ -149,25 +172,63 @@ class PostMortemManager:
         data["updated_at"] = datetime.now(timezone.utc).isoformat()
         overrides = data.setdefault("symbol_overrides", {})
         sym_cfg = overrides.setdefault(symbol, {})
+        base_candles = int(data.get("min_sweep_confirmation_candles", 2))
+        base_rr = float(data.get("min_rr_ratio", 2.0))
+        sym_cfg.setdefault("min_sweep_confirmation_candles", base_candles)
+        sym_cfg.setdefault("min_rr_ratio", base_rr)
+
+        mutation_state = data.setdefault("filter_mutation_state", {})
+        sym_state = mutation_state.setdefault(symbol, {
+            "trades_since_mutation": 0,
+            "losses_in_batch": 0,
+            "pending_recommendations": [],
+            "last_mutated_at": None,
+        })
+        sym_state["trades_since_mutation"] = int(sym_state.get("trades_since_mutation", 0)) + 1
 
         rec_candles = int(review.get("recommended_min_sweep_candles", 2))
         rec_rr = float(review.get("recommended_min_rr", 2.0))
         flaw = str(review.get("primefx_flaw_detected", "NONE")).upper()
 
         if outcome == "LOSS":
-            sym_cfg["min_sweep_confirmation_candles"] = max(2, min(4, rec_candles))
-            sym_cfg["min_rr_ratio"] = round(max(2.0, min(3.5, rec_rr)), 2)
-            blocked = data.setdefault("blocked_regimes_by_symbol", {})
-            sym_blocked = blocked.setdefault(symbol, [])
-            if "RANDOM_WALK_CHOP" not in sym_blocked:
-                sym_blocked.append("RANDOM_WALK_CHOP")
+            sym_state["losses_in_batch"] = int(sym_state.get("losses_in_batch", 0)) + 1
+            pending_recs = sym_state.setdefault("pending_recommendations", [])
+            pending_recs.append({
+                "recommended_min_sweep_candles": rec_candles,
+                "recommended_min_rr": rec_rr,
+                "flaw": flaw,
+            })
 
-            if flaw == "PRE_INDUCEMENT_TRAP":
-                data["require_inducement_sweep"] = True
-            elif flaw == "REVENGE_REENTRY":
-                data["revenge_cooldown_hours"] = round(max(2.0, float(data.get("revenge_cooldown_hours", 2.0))), 1)
-            elif flaw == "JUMP_SPIKE_STOPOUT":
-                sym_cfg["atr_sl_buffer_multiplier"] = round(max(0.75, float(sym_cfg.get("atr_sl_buffer_multiplier", 0.5)) + 0.15), 2)
+        n_batch = sym_state["trades_since_mutation"]
+        hard_mutated = False
+
+        if n_batch >= self.filter_mutation_batch_size:
+            pending_recs = sym_state.get("pending_recommendations", [])
+            if sym_state.get("losses_in_batch", 0) > 0 and pending_recs:
+                max_rec_candles = max(int(r.get("recommended_min_sweep_candles", base_candles)) for r in pending_recs)
+                max_rec_rr = max(float(r.get("recommended_min_rr", base_rr)) for r in pending_recs)
+                sym_cfg["min_sweep_confirmation_candles"] = max(2, min(4, max_rec_candles))
+                sym_cfg["min_rr_ratio"] = round(max(2.0, min(3.5, max_rec_rr)), 2)
+
+                blocked = data.setdefault("blocked_regimes_by_symbol", {})
+                sym_blocked = blocked.setdefault(symbol, [])
+                if "RANDOM_WALK_CHOP" not in sym_blocked:
+                    sym_blocked.append("RANDOM_WALK_CHOP")
+
+                batch_flaws = {str(r.get("flaw", "NONE")).upper() for r in pending_recs}
+                if "PRE_INDUCEMENT_TRAP" in batch_flaws:
+                    data["require_inducement_sweep"] = True
+                if "REVENGE_REENTRY" in batch_flaws:
+                    data["revenge_cooldown_hours"] = round(max(2.0, float(data.get("revenge_cooldown_hours", 2.0))), 1)
+                if "JUMP_SPIKE_STOPOUT" in batch_flaws:
+                    sym_cfg["atr_sl_buffer_multiplier"] = round(max(0.75, float(sym_cfg.get("atr_sl_buffer_multiplier", 0.5)) + 0.15), 2)
+                hard_mutated = True
+
+            # Reset Speed-2 counter for next batch window
+            sym_state["trades_since_mutation"] = 0
+            sym_state["losses_in_batch"] = 0
+            sym_state["pending_recommendations"] = []
+            sym_state["last_mutated_at"] = data["updated_at"]
 
         mutations = data.setdefault("recent_mutations", [])
         mutations.insert(0, {
@@ -175,6 +236,9 @@ class PostMortemManager:
             "trade_id": trade_id,
             "symbol": symbol,
             "outcome": outcome,
+            "speed": "SPEED_2_HARD_FILTER_MUTATION" if hard_mutated else "SPEED_1_WEIGHT_NUDGE",
+            "hard_filter_mutated": hard_mutated,
+            "cluster_trade_count": n_batch,
             "edge_class": review.get("primefx_edge_classification", ""),
             "flaw_detected": flaw,
             "rule": review.get("actionable_rule_mutation", "")
@@ -183,6 +247,7 @@ class PostMortemManager:
 
         with open(self.filters_path, "w") as f:
             json.dump(data, f, indent=2)
+        return hard_mutated
 
     def _mutate_weights(
         self,
@@ -215,15 +280,15 @@ class PostMortemManager:
                 pa_key = "PRICE_ACTION_AUCTION" if "PRICE_ACTION_AUCTION" in regime_data else "PRICE_ACTION"
                 all_strats = ["SMC_ICT", "SUPPLY_DEMAND", pa_key]
 
-                # Outcome anchor ensures win increases primary weight & loss trims it
-                outcome_alpha = 0.05 if outcome == "WIN" else -0.05
+                # Speed 1: Gentle immediate ±0.02 nudge so single CSPRNG variance never overreacts
+                outcome_alpha = 0.02 if outcome == "WIN" else -0.02
                 for s_name in all_strats:
                     cur_w = regime_data.get(s_name, 0.33)
                     ai_delta = float((suggested_deltas or {}).get(s_name, 0.0))
                     if s_name == pa_key and ai_delta == 0.0:
                         ai_delta = float((suggested_deltas or {}).get("PRICE_ACTION", 0.0))
-                    ai_delta = max(-0.05, min(0.05, ai_delta))
-                    eff_delta = (outcome_alpha if s_name == strategy else 0.0) + (ai_delta * 0.5)
+                    ai_delta = max(-0.02, min(0.02, ai_delta))
+                    eff_delta = max(-0.02, min(0.02, (outcome_alpha if s_name == strategy else 0.0) + (ai_delta * 0.5)))
                     regime_data[s_name] = round(max(0.10, min(0.70, cur_w + eff_delta)), 3)
 
                 total_w = sum(regime_data.get(s, 0.33) for s in all_strats)
