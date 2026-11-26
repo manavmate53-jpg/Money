@@ -1,6 +1,6 @@
 # 🏛 CAPITAL ADVISOR — $100 LIVE EXECUTION BLUEPRINT
 *Auto-updated every hour by the Execution & Risk Desk (`hourly_execution_desk.yml`)*  
-*Last Refresh: **2026-11-26 02:08:28 UTC***
+*Last Refresh: **2026-11-26 12:08:22 UTC***
 
 ---
 
@@ -17,8 +17,8 @@
 ---
 
 ## 🎯 2. #1 RECOMMENDED INSTRUMENT
-- **Instrument**: **`JD75`** *(Ranked #1 for $100 capital)*
-- **Directional Bias**: **BULLISH**
+- **Instrument**: **`JD100`** *(Ranked #1 for $100 capital)*
+- **Directional Bias**: **BEARISH**
 - **Market Regime**: `DIRECTIONAL_TREND`
 - **Primary Strategy**: `SMC_ICT`
 - **Champion Rule Alignment**: *PrimeFX Pure Price-Action + Liquidity Playbook*
@@ -28,23 +28,24 @@
 ## 🎫 3. EXACT EXECUTION TICKET
 | Parameter | Exact Value | Notes |
 | :--- | :--- | :--- |
-| **Recommended Lot Size** | **`0.01 lots`** | Granular nano-lot execution |
-| **Dollar Risk ($)** | **`$1.52`** | **1.52%** of $100 equity |
-| **Required Margin** | `$0.04` | Leverage 1:1000 |
-| **Entry Zone** | **`3880.47 - 3995.88`** | Structural ATR-calibrated entry band |
-| **Stop Loss (SL)** | **`3843.54`** | 152.34 points distance |
-| **Take Profit 1 (TP1)** | **`4376.73`** | Planned R:R: **1:2.5** |
-| **Take Profit 2 (TP2)** | **`4605.24`** | Major liquidity pool |
-| **Cover-Risk-to-Zero** | **`4148.22 (+1.0R displacement)`** | Ratchet SL to Break-Even at $+1.0R$ |
-| **Estimated Hold Time** | **4.4 hours (4 bars)** | Based on $\text{ATR}_{14}$ velocity |
+| **Recommended Lot Size** | **`1.15 lots`** | Granular nano-lot execution |
+| **Dollar Risk ($)** | **`$1.50`** | **1.5%** of $100 equity |
+| **Required Margin** | `$0.05` | Leverage 1:1000 |
+| **Entry Zone** | **`41.29 - 41.52`** | Structural ATR-calibrated entry band |
+| **Stop Loss (SL)** | **`42.59`** | 1.30 points distance |
+| **Take Profit 1 (TP1)** | **`38.04`** | Planned R:R: **1:2.5** |
+| **Take Profit 2 (TP2)** | **`36.09`** | Major liquidity pool |
+| **Cover-Risk-to-Zero** | **`39.99 (+1.0R displacement)`** | Ratchet SL to Break-Even at $+1.0R$ |
+| **Estimated Hold Time** | **3.2 hours (3 bars)** | Based on $\text{ATR}_{14}$ velocity |
 
 ---
 
 ## 🔍 4. CONFLUENCE SIGNALS
-- Structure: Bullish HH/HL structure progression
-- POI: H4 BULLISH_BREAKER [3880.47-3995.88] (NO_IDM_NEEDED)
-- Pure PA: Resistance-to-Support polarity flip @ 4174.86
-- k-NN Analogs (k=20): 45.0% win rate, +0.57R avg
+- Structure: Bearish LL/LH structure progression
+- POI: M15 BULLISH_IFVG [40.80-41.04] (NO_IDM_NEEDED)
+- POI: H4 BEARISH_FVG [41.29-41.52] (NO_IDM_NEEDED)
+- Pure PA: Support-to-Resistance polarity flip @ 41.52
+- k-NN Analogs (k=20): 60.0% win rate, +1.10R avg
 
 ---
 
@@ -53,5 +54,10 @@
 
 
 ### Why Other Indices Were Disqualified on $100 Capital
-- **R_100**: DISQUALIFIED_ON_$100: Minimum lot 0.5 on R_100 with 18.17 pt SL risks $9.09 (9.1%), exceeding $2.00 hard cap.
+- **1HZ50V**: DISQUALIFIED_ON_$100: Minimum lot 0.005 on 1HZ50V with 1005.12 pt SL risks $5.03 (5.0%), exceeding $2.00 hard cap.
+- **1HZ10V**: DISQUALIFIED_ON_$100: Minimum lot 0.2 on 1HZ10V with 12.26 pt SL risks $2.45 (2.5%), exceeding $2.00 hard cap.
+- **JD10**: DISQUALIFIED_ON_$100: Minimum lot 0.01 on JD10 with 575.06 pt SL risks $5.75 (5.8%), exceeding $2.00 hard cap.
+- **JD50**: DISQUALIFIED_ON_$100: Minimum lot 0.01 on JD50 with 1252.88 pt SL risks $12.53 (12.5%), exceeding $2.00 hard cap.
+- **R_75**: DISQUALIFIED_ON_$100: Minimum lot 0.01 on R_75 with 1263.30 pt SL risks $12.63 (12.6%), exceeding $2.00 hard cap.
+- **BOOM1000**: DISQUALIFIED_ON_$100: Minimum lot 0.2 on BOOM1000 with 184.67 pt SL risks $36.93 (36.9%), exceeding $2.00 hard cap.
 
