@@ -1,5 +1,5 @@
 # 🔴 LOSS LEDGER (POST-MORTEM & LOSS AUDIT REPOSITORY)
-*Auto-generated from `losing_trades` SQLite table | Refreshed: 2026-11-26 05:14:29 UTC*
+*Auto-generated from `losing_trades` SQLite table | Refreshed: 2026-11-27 05:12:16 UTC*
 **Total Realized Loss**: `-$1.30` across `1` losing setups
 
 | Trade ID | Symbol | Dir | Lot | Entry ➔ Exit | Realized R | Net Loss | Pre-Fund | Post-Fund | 5W Root Cause | What Improved? |
