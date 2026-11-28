@@ -1,24 +1,24 @@
 # 📈 30-DAY CALIBRATION SCOREBOARD & VAULT TRACKER
 *Auto-updated daily by the Investment Council Committee (`daily_council_committee.yml`)*  
-*Last Refresh: **2026-11-27 05:12:16 UTC***
+*Last Refresh: **2026-11-28 04:48:05 UTC***
 
 ---
 
-## 🎯 1. GRADUATION GATE STATUS: `TRAINING_CALIBRATION (Day 6/30)`
+## 🎯 1. GRADUATION GATE STATUS: `TRAINING_CALIBRATION (Day 7/30)`
 | Metric | Current Value | Required Live Gate | Status |
 | :--- | :--- | :--- | :--- |
-| **Calibration Window** | Day **6** / 30 | 30 full calendar days | ⏳ IN PROGRESS |
+| **Calibration Window** | Day **7** / 30 | 30 full calendar days | ⏳ IN PROGRESS |
 | **Resolved Sample** | **1** trades (`0W / 1L`) | $\ge 30$ resolved trades | ⏳ IN PROGRESS |
 | **Profit Factor** | **0.00** | $\ge 1.50$ | ❌ BELOW THRESHOLD |
 | **Max Drawdown** | **1.3%** | $\le 10.0\%$ | ✅ PASSED |
 | **Rolling Win Rate** | **0.0%** | Baseline $> 50.0\%$ | ⚠️ MONITORING |
-| **Monte Carlo Pass Prob** | **86.7%** | $\ge 65.0\%$ (+20% before -15%) | ✅ PASSED |
-| **Monte Carlo P95 Worst DD** | **7.5R** | $\le 10.0R$ | ✅ RESILIENT |
+| **Monte Carlo Pass Prob** | **87.2%** | $\ge 65.0\%$ (+20% before -15%) | ✅ PASSED |
+| **Monte Carlo P95 Worst DD** | **7.0R** | $\le 10.0R$ | ✅ RESILIENT |
 | **Sharpe / Sortino Ratio** | **0.00 / 0.00** | Sharpe $\ge 1.5$ / Sortino $\ge 2.0$ | ⏳ ACCUMULATING |
 | **Net Real Return** | **$+0.00** | Payouts minus Resets | 🟢 PROFITABLE |
 
 ### Remaining Graduation Gate Blockers:
-- ⏳ Day 6/30 calibration window
+- ⏳ Day 7/30 calibration window
 - ⏳ 1/30 minimum trades
 - ⏳ Profit factor 0.00 < 1.50
 
