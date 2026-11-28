@@ -108,10 +108,31 @@ class SmcIctEngine:
         elif trend == "BEARISH" and current_close > last_sh:
             mss = {"type": "BULLISH_MSS", "level": last_sh, "broken_at_close": current_close}
 
+        # Check fresh body-close MSS / displacement within the last 2 closed candles
+        recent_mss = None
+        if len(df) >= 6:
+            hi_arr = df["high"].astype(float)
+            lo_arr = df["low"].astype(float)
+            cl_arr = df["close"].astype(float)
+            op_arr = df["open"].astype(float)
+            avg_body = float((cl_arr - op_arr).abs().iloc[-14:].mean()) or 1e-6
+            for offset in (1, 2):
+                idx_b = len(df) - offset
+                c_cl = float(cl_arr.iloc[idx_b])
+                c_op = float(op_arr.iloc[idx_b])
+                body = abs(c_cl - c_op)
+                if c_cl > last_sh and c_cl > c_op and body >= 0.45 * avg_body:
+                    recent_mss = {"type": "BULLISH_MSS", "level": last_sh, "bars_ago": offset - 1, "body_ratio": round(body / avg_body, 2)}
+                    break
+                if c_cl < last_sl and c_cl < c_op and body >= 0.45 * avg_body:
+                    recent_mss = {"type": "BEARISH_MSS", "level": last_sl, "bars_ago": offset - 1, "body_ratio": round(body / avg_body, 2)}
+                    break
+
         return {
             "trend": trend,
             "bos": bos,
             "mss": mss,
+            "recent_mss": recent_mss,
             "last_swing_high": last_sh,
             "last_swing_low": last_sl,
             "prior_swing_high": prior_sh,

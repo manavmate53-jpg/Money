@@ -8,6 +8,18 @@
   "live_ready_risk_percent": 1.5,
   "live_hard_cap_risk_percent": 2.0,
   "max_concurrent_positions_small_account": 1,
+  "paper_training_buckets": {
+    "enabled": true,
+    "max_concurrent_positions": 3,
+    "max_per_bucket": 1,
+    "max_total_risk_dollars": 4.5,
+    "max_total_risk_percent": 4.5,
+    "buckets": {
+      "JUMP_FAMILY": ["JD10", "JD25", "JD50", "JD75", "JD100"],
+      "VOL_1S_FAMILY": ["1HZ10V", "1HZ25V", "1HZ50V", "1HZ75V", "1HZ100V"],
+      "STEP_CLASSIC_FAMILY": ["STEPINDEX", "STPRNG", "R_10", "R_25", "R_50", "R_75", "R_100", "BOOM1000", "CRASH1000"]
+    }
+  },
   "minimum_risk_reward_ratio": 2.5,
   "profit_lock_vault": {
     "enabled": true,

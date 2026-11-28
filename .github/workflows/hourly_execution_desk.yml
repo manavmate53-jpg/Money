@@ -4,6 +4,8 @@ on:
   schedule:
     # Runs every 1 hour at minute 0 UTC
     - cron: "0 * * * *"
+  repository_dispatch:
+    types: [run-hourly-desk]
   workflow_dispatch:
 
 concurrency:

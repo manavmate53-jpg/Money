@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 class TradingTip(BaseModel):
     symbol: str
     direction: str  # BULLISH, BEARISH, NEUTRAL_NO_TRADE
+    entry_mode: str = "LIMIT_PULLBACK"  # MARKET_CONFIRMATION | LIMIT_PULLBACK | NONE
     confidence_score: float
     primary_strategy: str
     secondary_strategy: Optional[str] = None
@@ -142,6 +143,7 @@ class ConfluenceEngine:
         return TradingTip(
             symbol=symbol,
             direction="NEUTRAL_NO_TRADE",
+            entry_mode="NONE",
             confidence_score=0.30,
             primary_strategy="NONE",
             secondary_strategy=None,
@@ -162,6 +164,44 @@ class ConfluenceEngine:
             champions_rule_match=None
         )
 
+    @staticmethod
+    def _pick_m15_pullback_zone(
+        m15_smc: Optional[Dict[str, Any]],
+        direction: str,
+        current_price: float,
+        atr_14: float,
+    ) -> Optional[Dict[str, float]]:
+        """Finds the closest unmitigated M15 FVG or Order Block on the pullback side."""
+        if not m15_smc or direction not in ("BULLISH", "BEARISH"):
+            return None
+        fvg_type = f"{direction}_FVG"
+        ob_type = f"{direction}_OB"
+        candidates: List[Dict[str, float]] = []
+
+        for fvg in m15_smc.get("unmitigated_fvgs", []):
+            if fvg.get("type") == fvg_type and not fvg.get("is_mitigated", False):
+                z_bot = float(fvg["gap_low"])
+                z_top = float(fvg["gap_high"])
+                mid = float(fvg.get("consequent_encroachment", (z_bot + z_top) / 2.0))
+                if direction == "BULLISH" and -0.15 * atr_14 <= (current_price - mid) <= 1.8 * atr_14:
+                    candidates.append({"zone_bottom": z_bot, "zone_top": z_top, "midpoint": mid, "dist": abs(current_price - mid)})
+                elif direction == "BEARISH" and -0.15 * atr_14 <= (mid - current_price) <= 1.8 * atr_14:
+                    candidates.append({"zone_bottom": z_bot, "zone_top": z_top, "midpoint": mid, "dist": abs(current_price - mid)})
+
+        for ob in m15_smc.get("unmitigated_obs", []):
+            if ob.get("type") == ob_type and not ob.get("is_mitigated", False):
+                z_bot = float(ob["zone_bottom"])
+                z_top = float(ob["zone_top"])
+                mid = (z_bot + z_top) / 2.0
+                if direction == "BULLISH" and -0.15 * atr_14 <= (current_price - mid) <= 1.8 * atr_14:
+                    candidates.append({"zone_bottom": z_bot, "zone_top": z_top, "midpoint": mid, "dist": abs(current_price - mid)})
+                elif direction == "BEARISH" and -0.15 * atr_14 <= (mid - current_price) <= 1.8 * atr_14:
+                    candidates.append({"zone_bottom": z_bot, "zone_top": z_top, "midpoint": mid, "dist": abs(current_price - mid)})
+
+        if not candidates:
+            return None
+        return min(candidates, key=lambda c: c["dist"])
+
     def generate_tip(
         self,
         symbol: str,
@@ -170,19 +210,23 @@ class ConfluenceEngine:
         h4_df: Optional[pd.DataFrame] = None,
         d1_df: Optional[pd.DataFrame] = None,
         macro_bias: Optional[str] = None,
+        macro_confidence: Optional[float] = None,
         h4_mss_confirmed: bool = False,
         hours_since_last_loss: Optional[float] = None,
+        recent_expired_or_stopped: Optional[List[Dict[str, Any]]] = None,
     ) -> TradingTip:
         """
         Pure Price-Action & PrimeFX Liquidity/POI Setup Generator.
-        Enforces Inducement clearing, Liquidity Sweep 2-candle confirmation,
-        Anti-Revenge Cooldown, H4 Macro Alignment, M15 ATR zone calibration, and Jump Index SL guard.
+        Enforces Hurst/ADX/ER regime gating, Inducement clearing, Liquidity Sweep confirmation,
+        Dual-Mode Entry (MARKET_CONFIRMATION vs 50%-eq LIMIT_PULLBACK), and 12h Zone Deduplication.
         """
         self.reload_filters()
         current_price = float(df["close"].iloc[-1])
 
         pa_res = self.pa.analyze(df)
         regime = pa_res["regime"]
+        regime_metrics = pa_res.get("regime_metrics", {})
+        quant_conf = float(regime_metrics.get("quant_confidence", 0.55))
         atr_14 = pa_res["atr_14"] or 1.0
         m15_atr = atr_14 * 0.5
         if m15_df is not None and len(m15_df) >= 10:
@@ -204,12 +248,20 @@ class ConfluenceEngine:
                 [f"Anti-Revenge Shield: Blocked re-entry on {symbol} ({hours_since_last_loss:.1f}h < {cooldown_h:.1f}h post-SL cooldown)"]
             )
 
-        # Rule 2: Blocked regimes per symbol
+        # Rule 2: Blocked regimes per symbol + Mandatory Hurst/ADX RANDOM_WALK_CHOP block
         blocked_regimes = self.active_filters.get("blocked_regimes_by_symbol", {}).get(symbol, [])
         if regime in blocked_regimes:
             return self._neutral_tip(
                 symbol, regime, current_price, atr_14,
                 [f"Council Filter: Regime '{regime}' blocked for {symbol} by active_filters.json"]
+            )
+        if regime == "RANDOM_WALK_CHOP":
+            return self._neutral_tip(
+                symbol, regime, current_price, atr_14,
+                [
+                    f"Hurst/ADX Chop Gate: Blocked entry in RANDOM_WALK_CHOP "
+                    f"(H={regime_metrics.get('hurst', 0.5):.3f}, ADX={regime_metrics.get('adx_14', 0.0):.1f}, ER={regime_metrics.get('efficiency_ratio', 0.0):.2f})"
+                ]
             )
 
         # Run Liquidity & Multi-TF POI Engines + M15 Market Structure Shift (body close)
@@ -357,6 +409,15 @@ class ConfluenceEngine:
         elif bearish_score > bullish_score and bearish_score >= threshold:
             candidate_dir = "BEARISH"
 
+        # Rule 3b: Rotational range blocks pure trend continuation (liquidity-sweep fade only)
+        if candidate_dir != "NEUTRAL_NO_TRADE" and regime == "ROTATIONAL_RANGE":
+            if candidate_dir == "BULLISH" and not bull_sweep_confirmed:
+                reasons.append("Regime Filter: ROTATIONAL_RANGE blocks trend continuation; sweep fade required")
+                return self._neutral_tip(symbol, regime, current_price, atr_14, reasons)
+            if candidate_dir == "BEARISH" and not bear_sweep_confirmed:
+                reasons.append("Regime Filter: ROTATIONAL_RANGE blocks trend continuation; sweep fade required")
+                return self._neutral_tip(symbol, regime, current_price, atr_14, reasons)
+
         # Rule 4: Block pure pre-inducement trap entries if candidate lacks IDM clearing & lacks sweep
         if require_idm:
             if candidate_dir == "BULLISH" and trap_bull and not best_bull_poi and not bull_sweep_confirmed:
@@ -377,84 +438,128 @@ class ConfluenceEngine:
                 reasons.append(f"Macro Gate: Rejected counter-macro {candidate_dir} setup (H4 bias is {mb})")
                 return self._neutral_tip(symbol, regime, current_price, atr_14, reasons)
 
-        # Entry zone calibration: 0.25 * ATR_14(M15) around POI/current price
-        atr_band_width = max(round(zone_m15_mult * m15_atr, 2), round(atr_14 * 0.15, 2), 0.10)
+        # Entry zone calibration: max 0.30 * ATR_14(M15) around 50% equilibrium OR tight band for MARKET_CONFIRMATION
+        zone_m15_mult = float(self._get_symbol_filter_val(symbol, "entry_zone_m15_atr_width", 0.30))
+        atr_band_width = max(round(zone_m15_mult * m15_atr, 2), 0.10)
         pools = liq_res["pools"]
+        eff_macro_conf = float(macro_confidence) if macro_confidence is not None else quant_conf
+        m15_recent_mss = m15_smc["structure"].get("recent_mss") if m15_smc else None
 
-        if candidate_dir == "BULLISH":
-            direction = "BULLISH"
-            confidence = min(0.95, bullish_score)
-            primary_strat = "SMC_ICT" if (bull_sweep_confirmed or smc_trend == "BULLISH") else "SUPPLY_DEMAND"
+        entry_mode = "LIMIT_PULLBACK"
+        if candidate_dir in ("BULLISH", "BEARISH"):
+            direction = candidate_dir
+            raw_score = bullish_score if direction == "BULLISH" else bearish_score
+            confidence = round(
+                min(0.94, max(0.42, (0.58 * min(0.96, raw_score / 1.55)) + (0.42 * eff_macro_conf))),
+                3,
+            )
+            dir_sweep = bull_sweep if direction == "BULLISH" else bear_sweep
+            dir_sweep_ok = bull_sweep_confirmed if direction == "BULLISH" else bear_sweep_confirmed
+            dir_poi = best_bull_poi if direction == "BULLISH" else best_bear_poi
+            dir_sd = nearest_d if direction == "BULLISH" else nearest_s
+
+            primary_strat = "SMC_ICT" if (dir_sweep_ok or smc_trend == direction) else "SUPPLY_DEMAND"
             secondary_strat = "PRICE_ACTION"
 
-            anchor_zone = best_bull_poi or ({"zone_bottom": nearest_d["base_bottom"], "zone_top": nearest_d["base_top"]} if nearest_d else None)
-            if anchor_zone:
-                entry_max = round(anchor_zone["zone_top"], 2)
-                entry_min = round(min(anchor_zone["zone_bottom"], entry_max - atr_band_width), 2)
-                raw_sl = entry_min - (sl_buf_mult * atr_14)
+            m15_pb_zone = self._pick_m15_pullback_zone(m15_smc, direction, current_price, atr_14)
+            anchor_zone = m15_pb_zone or dir_poi or (
+                {"zone_bottom": dir_sd["base_bottom"], "zone_top": dir_sd["base_top"]} if dir_sd else None
+            )
+            dist_to_zone = (
+                max(0.0, float(anchor_zone["zone_bottom"]) - current_price, current_price - float(anchor_zone["zone_top"]))
+                if anchor_zone else 0.0
+            )
+            has_m15_disp = bool(
+                m15_recent_mss
+                and m15_recent_mss.get("type") == f"{direction}_MSS"
+                and (m15_pb_zone is not None or bool(m15_smc and (m15_smc.get("unmitigated_fvgs") or m15_smc.get("unmitigated_obs"))) or dir_poi is not None)
+            )
+            macro_aligned = (macro_bias is None or macro_bias.upper() == direction)
+
+            if dir_sweep is not None and has_m15_disp and dist_to_zone <= (0.75 * m15_atr) and macro_aligned and eff_macro_conf >= 0.72:
+                entry_mode = "MARKET_CONFIRMATION"
+                half_band = max(round(0.15 * m15_atr, 2), 0.05)
+                entry_min = round(current_price - half_band, 2)
+                entry_max = round(current_price + half_band, 2)
+                entry_ref = round(current_price, 2)
+                reasons.append(
+                    f"Entry Mode: MARKET_CONFIRMATION (sweep + M15 MSS {m15_recent_mss['bars_ago']}b ago, "
+                    f"dist={dist_to_zone:.2f} <= 0.75*M15_ATR, H4 conf={eff_macro_conf:.2f})"
+                )
             else:
-                entry_max = round(current_price, 2)
-                entry_min = round(current_price - atr_band_width, 2)
-                raw_sl = entry_max - (1.5 * atr_14)
+                entry_mode = "LIMIT_PULLBACK"
+                if anchor_zone:
+                    eq_mid = (float(anchor_zone["zone_bottom"]) + float(anchor_zone["zone_top"])) / 2.0
+                    entry_min = round(eq_mid - (0.5 * atr_band_width), 2)
+                    entry_max = round(eq_mid + (0.5 * atr_band_width), 2)
+                else:
+                    if direction == "BULLISH":
+                        entry_max = round(current_price, 2)
+                        entry_min = round(current_price - atr_band_width, 2)
+                    else:
+                        entry_min = round(current_price, 2)
+                        entry_max = round(current_price + atr_band_width, 2)
+                entry_ref = entry_max if direction == "BULLISH" else entry_min
 
-            # Sweep-extreme & Jump-Index SL Guard (>= 1.5 * ATR_14 beyond sweep extreme)
-            sweep_ext = bull_sweep["wick_extreme"] if bull_sweep else None
-            if is_jump or sweep_ext is not None:
-                min_jump_dist = (jump_sl_mult if is_jump else 1.0) * atr_14
-                floor_candidates = [raw_sl, entry_max - min_jump_dist]
-                if sweep_ext is not None:
-                    floor_candidates.append(sweep_ext - (0.35 * atr_14))
-                sl = round(min(floor_candidates), 2)
+            if direction == "BULLISH":
+                raw_sl = (entry_min - (sl_buf_mult * atr_14)) if anchor_zone else (entry_max - (1.5 * atr_14))
+                sweep_ext = bull_sweep["wick_extreme"] if bull_sweep else None
+                if is_jump or sweep_ext is not None:
+                    min_jump_dist = (jump_sl_mult if is_jump else 1.0) * atr_14
+                    floor_candidates = [raw_sl, entry_ref - min_jump_dist]
+                    if sweep_ext is not None:
+                        floor_candidates.append(sweep_ext - (0.35 * atr_14))
+                    sl = round(min(floor_candidates), 2)
+                else:
+                    sl = round(raw_sl, 2)
+
+                sl_dist = abs(entry_ref - sl)
+                rr_target = max(2.5, min_rr)
+                tp1_rr = round(entry_ref + (rr_target * sl_dist), 2)
+                ext_targets = [t for t in [pools["pdh"], pools["p4hh"], *pools["eqh"], *pools["bsl_pools"]] if t > tp1_rr]
+                tp1 = tp1_rr
+                tp2 = round(min(ext_targets), 2) if ext_targets else round(entry_ref + (max(4.0, rr_target + 1.5) * sl_dist), 2)
+                be_trigger = round(entry_ref + (1.0 * sl_dist), 2)
             else:
-                sl = round(raw_sl, 2)
+                raw_sl = (entry_max + (sl_buf_mult * atr_14)) if anchor_zone else (entry_min + (1.5 * atr_14))
+                sweep_ext = bear_sweep["wick_extreme"] if bear_sweep else None
+                if is_jump or sweep_ext is not None:
+                    min_jump_dist = (jump_sl_mult if is_jump else 1.0) * atr_14
+                    ceil_candidates = [raw_sl, entry_ref + min_jump_dist]
+                    if sweep_ext is not None:
+                        ceil_candidates.append(sweep_ext + (0.35 * atr_14))
+                    sl = round(max(ceil_candidates), 2)
+                else:
+                    sl = round(raw_sl, 2)
 
-            sl_dist = abs(entry_max - sl)
-            rr_target = max(2.5, min_rr)
-            # Aim TP1 at min R:R or opposing liquidity pool (BSL/PDH/EQH)
-            tp1_rr = round(entry_max + (rr_target * sl_dist), 2)
-            ext_targets = [t for t in [pools["pdh"], pools["p4hh"], *pools["eqh"], *pools["bsl_pools"]] if t > tp1_rr]
-            tp1 = tp1_rr
-            tp2 = round(min(ext_targets), 2) if ext_targets else round(entry_max + (max(4.0, rr_target + 1.5) * sl_dist), 2)
-            be_trigger = round(entry_max + (1.0 * sl_dist), 2)
-
-        elif candidate_dir == "BEARISH":
-            direction = "BEARISH"
-            confidence = min(0.95, bearish_score)
-            primary_strat = "SMC_ICT" if (bear_sweep_confirmed or smc_trend == "BEARISH") else "SUPPLY_DEMAND"
-            secondary_strat = "PRICE_ACTION"
-
-            anchor_zone = best_bear_poi or ({"zone_bottom": nearest_s["base_bottom"], "zone_top": nearest_s["base_top"]} if nearest_s else None)
-            if anchor_zone:
-                entry_min = round(anchor_zone["zone_bottom"], 2)
-                entry_max = round(max(anchor_zone["zone_top"], entry_min + atr_band_width), 2)
-                raw_sl = entry_max + (sl_buf_mult * atr_14)
-            else:
-                entry_min = round(current_price, 2)
-                entry_max = round(current_price + atr_band_width, 2)
-                raw_sl = entry_min + (1.5 * atr_14)
-
-            sweep_ext = bear_sweep["wick_extreme"] if bear_sweep else None
-            if is_jump or sweep_ext is not None:
-                min_jump_dist = (jump_sl_mult if is_jump else 1.0) * atr_14
-                ceil_candidates = [raw_sl, entry_min + min_jump_dist]
-                if sweep_ext is not None:
-                    ceil_candidates.append(sweep_ext + (0.35 * atr_14))
-                sl = round(max(ceil_candidates), 2)
-            else:
-                sl = round(raw_sl, 2)
-
-            sl_dist = abs(sl - entry_min)
-            rr_target = max(2.5, min_rr)
-            tp1_rr = round(entry_min - (rr_target * sl_dist), 2)
-            ext_targets = [t for t in [pools["pdl"], pools["p4hl"], *pools["eql"], *pools["ssl_pools"]] if t < tp1_rr]
-            tp1 = tp1_rr
-            tp2 = round(max(ext_targets), 2) if ext_targets else round(entry_min - (max(4.0, rr_target + 1.5) * sl_dist), 2)
-            be_trigger = round(entry_min - (1.0 * sl_dist), 2)
-
+                sl_dist = abs(sl - entry_ref)
+                rr_target = max(2.5, min_rr)
+                tp1_rr = round(entry_ref - (rr_target * sl_dist), 2)
+                ext_targets = [t for t in [pools["pdl"], pools["p4hl"], *pools["eql"], *pools["ssl_pools"]] if t < tp1_rr]
+                tp1 = tp1_rr
+                tp2 = round(max(ext_targets), 2) if ext_targets else round(entry_ref - (max(4.0, rr_target + 1.5) * sl_dist), 2)
+                be_trigger = round(entry_ref - (1.0 * sl_dist), 2)
         else:
             return self._neutral_tip(symbol, regime, current_price, atr_14, reasons)
 
-        entry_ref = entry_max if direction == "BULLISH" else entry_min
+        # 12-Hour Expired/Stopped Zone Deduplication Guard
+        if recent_expired_or_stopped:
+            dedup_mult = float(self.active_filters.get("dedup_zone_atr_mult", 0.50))
+            prop_mid = (entry_min + entry_max) / 2.0
+            for prev in recent_expired_or_stopped:
+                prev_dir = prev.get("direction")
+                if prev_dir and prev_dir != direction:
+                    continue
+                prev_mid = prev.get("midpoint")
+                if prev_mid is None:
+                    prev_mid = (float(prev.get("entry_min", 0.0)) + float(prev.get("entry_max", 0.0))) / 2.0
+                if abs(prop_mid - float(prev_mid)) <= (dedup_mult * atr_14):
+                    reasons.append(
+                        f"Deduplication Guard: Setup zone [{entry_min:.2f}-{entry_max:.2f}] within "
+                        f"{dedup_mult:.2f}*H1_ATR ({dedup_mult*atr_14:.2f}) of recent {prev.get('status', 'PRIOR')} zone {float(prev_mid):.2f}"
+                    )
+                    return self._neutral_tip(symbol, regime, current_price, atr_14, reasons)
+
         sl_points = abs(entry_ref - sl)
         tp1_points = abs(tp1 - entry_ref)
         rr = round(tp1_points / sl_points, 2) if sl_points > 0 else 0.0
@@ -494,7 +599,8 @@ class ConfluenceEngine:
         return TradingTip(
             symbol=symbol,
             direction=direction,
-            confidence_score=round(confidence, 2),
+            entry_mode=entry_mode,
+            confidence_score=confidence,
             primary_strategy=primary_strat,
             secondary_strategy=secondary_strat,
             market_regime=regime,

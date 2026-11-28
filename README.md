@@ -6,9 +6,9 @@
 [![Deriv Synthetic Trading](https://img.shields.io/badge/Deriv-Synthetic_Indices-00a8ff.svg)](https://deriv.com)
 [![Gemini Council](https://img.shields.io/badge/Gemini_2.5-Multimodal_Council-4285F4.svg)](https://deepmind.google/technologies/gemini/)
 
-An institutional-grade, self-training quantitative trading bot and capital advisor designed for **Deriv Synthetic Indices** (`Volatility 10–100`, `1s` variants, `Boom/Crash`, `Step Index`). 
+An institutional-grade, self-training quantitative trading bot and capital advisor designed for **Deriv Synthetic Indices** (`Volatility 10–100 (1s)`, `Jump 10–100`, `Step Index`, `Volatility 75`). 
 
-Runs 24/7 autonomously inside **GitHub Actions** across distinct hedge-fund operational cadences, persisting state across runs via automated Git commits and providing human-ready trade tickets in [`reports/LATEST_ADVICE.md`](reports/LATEST_ADVICE.md).
+Runs 24/7 autonomously inside **GitHub Actions** (`schedule` + exact-time `repository_dispatch`) across distinct hedge-fund operational cadences, persisting state across runs via automated Git commits and providing human-ready `#1 + Uncorrelated Backup` trade tickets in [`reports/LATEST_ADVICE.md`](reports/LATEST_ADVICE.md).
 
 ---
 
@@ -16,10 +16,18 @@ Runs 24/7 autonomously inside **GitHub Actions** across distinct hedge-fund oper
 
 | Hedge-Fund Desk | GitHub Actions Cadence | Core Responsibility | Gemini Model & Action | State Output |
 | :--- | :--- | :--- | :--- | :--- |
-| **1. Execution & Risk Desk** | **Every 1 Hour** (`0 * * * *` UTC) | Intrabar TP/SL tracking, Break-Even ratchet at `+1.0R`, M15 sniper entries aligned with H4 macro bias | `gemini-2.5-flash` | [`reports/LATEST_ADVICE.md`](reports/LATEST_ADVICE.md), `data/trading_state.db` |
-| **2. Macro & Regime Desk** | **Every 4 Hours** (`0 */4 * * *` UTC) | Captures H4/H1/M15 chart PNGs via Playwright, scores SMC, Supply/Demand, One-Time Framing & Value Area | `gemini-2.5-pro` (Vision) | [`config/macro_bias.json`](config/macro_bias.json) |
-| **3. Investment Council & Vault** | **Every 24 Hours** (`30 23 * * *` UTC) | Deep post-mortem on closed trades, updates Bayesian weights, sweeps 50% profit into Vault, auto-resets epochs | `gemini-2.5-pro` (Reflexion) | [`config/strategy_weights.json`](config/strategy_weights.json), [`reports/TRAINING_DASHBOARD.md`](reports/TRAINING_DASHBOARD.md) |
+| **1. Execution & Risk Desk** | **Hourly + `repository_dispatch` (`run-hourly-desk`)** | M15 intra-window fill/4h TTL & 16h stagnation exit tracking, `MARKET_CONFIRMATION` + 50%-eq `LIMIT_PULLBACK` entries across 3 uncorrelated buckets | `gemini-2.5-flash` | [`reports/LATEST_ADVICE.md`](reports/LATEST_ADVICE.md), `data/trading_state.db` |
+| **2. Macro & Regime Desk** | **4-Hourly + `repository_dispatch` (`run-macro-desk`)** | Captures H4/H1/M15 TradingView PNGs via Playwright, computes Hurst/ADX(14)/Kaufman ER(20), PrimeFX POIs & Pure Price Action | `gemini-2.5-flash` (Vision + Quant Blend) | [`config/macro_bias.json`](config/macro_bias.json) |
+| **3. Investment Council & Vault** | **Daily + `repository_dispatch` (`run-council-desk`)** | Deep post-mortem on closed trades, mutates weights/filters every 5 losses, sweeps 50% profit into Vault, runs Monte Carlo & resets epochs | `gemini-2.5-pro` (Reflexion) | [`config/strategy_weights.json`](config/strategy_weights.json), [`reports/TRAINING_DASHBOARD.md`](reports/TRAINING_DASHBOARD.md) |
 | **4. On-Demand Advisor** | **Manual Trigger** (`workflow_dispatch`) | Run on-demand scan or custom capital allocation (e.g. `$100`, `$500`) from the GitHub Actions tab | `gemini-2.5-pro` | [`reports/LATEST_ADVICE.md`](reports/LATEST_ADVICE.md) |
+
+> [!TIP]
+> **Exact On-Time Cron Scheduling via `repository_dispatch`**: Because GitHub Actions `schedule:` crons frequently experience 30–120+ minute queue delays on public repos, all 3 automated workflows also listen to **`repository_dispatch`** (`run-hourly-desk`, `run-macro-desk`, `run-council-desk`). Trigger them on the exact minute from macOS `launchd`, cron-job.org, or locally via:
+> ```bash
+> export GITHUB_TOKEN="<your-github-pat-with-repo-workflow-scope>"
+> python scripts/trigger_dispatch.py --desk hourly   # or --desk macro | --desk council
+> python scripts/trigger_dispatch.py --print-launchd-plist --desk hourly  # print exact macOS launchd plist
+> ```
 
 ---
 
@@ -64,7 +72,7 @@ Runs 24/7 autonomously inside **GitHub Actions** across distinct hedge-fund oper
                       ├─────────────────────────────────────┤
                       │ • Engine A: ICT & Smart Money (SMC) │
                       │ • Engine B: Supply & Demand Zones   │
-                      │ • Engine C: Auction Market Theory   │
+                      │ • Engine C: Pure Price Action & Reg │
                       └──────────────────┬──────────────────┘
                                          │
                                          ▼
@@ -104,7 +112,7 @@ Runs 24/7 autonomously inside **GitHub Actions** across distinct hedge-fund oper
 ## ⚡ KEY QUANTITATIVE SAFEGUARDS
 
 1. **Canvas Blindness Solved**: Deriv renders charts via an HTML5 `<canvas>` (SmartCharts), preventing DOM text parsing. This bot pairs **Playwright chart screenshots** (for visual structure auditing by Gemini Vision) with **WebSocket JSON-RPC packet extraction** (`wss://ws.derivws.com/websockets/v3`) for zero-error indicator calculation.
-2. **Small-Account ($100) Protection**: Deriv's standard `Volatility 75` enforces a `0.01` minimum lot size ($10 per 1,000 points), forcing an unsafe $2.50–$5.00 stop loss risk on a $100 account. The **Position Sizer** automatically disqualifies standard V75 and routes capital to nano-lot instruments (`Volatility 25 (1s)`, `Volatility 50 (1s)`, and `Step Index` with `0.005` lot granularity), strictly capping risk to $1.00–$1.50 (1.0%–1.5%).
+2. **Small-Account ($100) Protection & Jump Gap Shield**: Deriv's standard `Volatility 75` enforces a `0.01` minimum lot size, forcing oversized stop-loss risk on a `$100` account, while Jump Indices (`JD10`–`JD100`) experience discrete 20-minute news-style jumps (`1.50x` effective gap-slippage haircut in `PositionSizer`). During `TRAINING_CALIBRATION`, paper training runs up to **3 uncorrelated asset buckets** (`JUMP_FAMILY`, `VOL_1S_FAMILY`, `STEP_CLASSIC_FAMILY`, max 1 per bucket, `<= $4.50` combined risk) for faster statistical validation, while live `$100` advice in `LATEST_ADVICE.md` stays strictly locked to **`1` top setup + `1` uncorrelated backup**!
 3. **The Two-Bucket Profit-Lock Vault ("Profit Comes Home With Us")**: Every time active capital grows by `+20%` (e.g. $100 $\to$ $120), **50% of the profit ($10) is swept permanently into the Locked Profit Vault** (profit brought home) and **50% ($10) compounds active trading bankroll**. Vaulted capital is immune to future trading drawdowns.
 4. **Anti-Greed Session & In-Trade Rules**:
    - **Cover Risk to Zero**: Stop loss ratchets immediately to Break-Even (0R) once open profit reaches $+1.0R$ (World Cup Champion Fabio Valentini rule).

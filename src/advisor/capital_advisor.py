@@ -12,6 +12,7 @@ from typing import Dict, Any, List, Optional
 from src.database.db_manager import DatabaseManager
 from src.risk.pip_calculator import PipCalculator
 from src.risk.position_sizer import PositionSizer
+from src.risk.bankroll_manager import get_asset_bucket
 from src.technicals.confluence_engine import ConfluenceEngine, TradingTip
 from src.technicals.pattern_memory import PatternMemoryEngine
 from src.browser.ws_interceptor import DerivWsInterceptor
@@ -57,12 +58,12 @@ class CapitalAdvisor:
         self.gate = readiness_gate or ReadinessGate(self.db)
         self.macro_bias_path = macro_bias_path
 
-    def _load_macro_bias_map(self) -> Dict[str, str]:
+    def _load_macro_bias_map(self) -> Dict[str, Dict[str, Any]]:
         if os.path.exists(self.macro_bias_path):
             try:
                 with open(self.macro_bias_path, "r") as f:
                     instruments = json.load(f).get("instruments", {})
-                return {sym: info.get("macro_bias", "NEUTRAL") for sym, info in instruments.items()}
+                return instruments
             except Exception:
                 pass
         return {}
@@ -70,7 +71,8 @@ class CapitalAdvisor:
     def advise(self, capital: float = 100.0, report_path: str = "reports/LATEST_ADVICE.md") -> Dict[str, Any]:
         """
         Scans instruments across H1 + M15 candles against H4 macro bias, applies strict
-        small-account viability gates, and writes reports/LATEST_ADVICE.md.
+        small-account viability gates & Jump-Index gap penalty, keeps live recommendations
+        locked to 1 primary trade (plus 1 uncorrelated backup setup), and writes reports/LATEST_ADVICE.md.
         """
         readiness = self.gate.evaluate_metrics(write_report=False)
         macro_map = self._load_macro_bias_map()
@@ -85,13 +87,16 @@ class CapitalAdvisor:
             df_h4 = self.ws.get_candles(symbol, timeframe="H4", count=100)
             hours_loss = self.db.get_hours_since_last_loss(symbol)
 
-            macro_bias = macro_map.get(symbol)
+            macro_info = macro_map.get(symbol, {})
+            macro_bias = macro_info.get("macro_bias") if isinstance(macro_info, dict) else macro_info
+            macro_conf = macro_info.get("confidence_score") if isinstance(macro_info, dict) else None
             tip = self.confluence.generate_tip(
                 symbol,
                 df_h1,
                 m15_df=df_m15,
                 h4_df=df_h4,
                 macro_bias=macro_bias,
+                macro_confidence=macro_conf,
                 hours_since_last_loss=hours_loss,
             )
             if tip.direction == "NEUTRAL_NO_TRADE":
@@ -114,8 +119,13 @@ class CapitalAdvisor:
                 })
             else:
                 score = (tip.confidence_score * 0.6) + (min(3.5, tip.risk_reward_ratio) / 3.5 * 0.4)
+                # Fix 4: Apply -0.12 Jump-Index ranking penalty unless high-conf (>=82%) & >=3.0R
+                is_jump = symbol.upper().startswith("JD")
+                if is_jump and not (tip.confidence_score >= 0.82 and tip.risk_reward_ratio >= 3.0):
+                    score -= 0.12
                 candidates.append({
                     "symbol": symbol,
+                    "bucket": get_asset_bucket(symbol),
                     "tip": tip,
                     "viability": viability,
                     "score": round(score, 3)
@@ -164,6 +174,25 @@ class CapitalAdvisor:
         else:
             top_candidate = candidates[0]
 
+        top_bucket = get_asset_bucket(top_candidate["symbol"])
+        backup_cand = next((c for c in candidates if c.get("bucket", get_asset_bucket(c["symbol"])) != top_bucket), None)
+        backup_setup = None
+        if backup_cand:
+            b_tip: TradingTip = backup_cand["tip"]
+            b_viab: Dict[str, Any] = backup_cand["viability"]
+            backup_setup = {
+                "symbol": b_tip.symbol,
+                "bucket": backup_cand["bucket"],
+                "direction": b_tip.direction,
+                "entry_mode": b_tip.entry_mode,
+                "lot_size": b_viab.get("recommended_lot", b_viab.get("min_lot", 0.1)),
+                "dollar_risk": b_viab.get("actual_dollar_risk", 1.50),
+                "entry_zone": f"{min(b_tip.entry_min, b_tip.entry_max):.2f} - {max(b_tip.entry_min, b_tip.entry_max):.2f}",
+                "stop_loss": f"{b_tip.stop_loss:.2f}",
+                "take_profit_1": f"{b_tip.take_profit_1:.2f}",
+                "risk_reward_ratio": f"1:{b_tip.risk_reward_ratio:.1f}",
+            }
+
         best_tip: TradingTip = top_candidate["tip"]
         best_viab: Dict[str, Any] = top_candidate["viability"]
 
@@ -177,6 +206,8 @@ class CapitalAdvisor:
             "capital_analyzed": capital,
             "readiness": readiness,
             "recommended_instrument": best_tip.symbol,
+            "asset_bucket": top_bucket,
+            "entry_mode": best_tip.entry_mode,
             "direction": best_tip.direction,
             "market_regime": best_tip.market_regime,
             "primary_strategy": best_tip.primary_strategy,
@@ -195,6 +226,7 @@ class CapitalAdvisor:
             "hold_time_estimate": "N/A (Awaiting Valid Entry)" if is_standby else hold_time_str,
             "confluence_reasons": best_tip.confluence_reasons or ["Awaiting H4 macro alignment & 2-candle confirmation"],
             "council_edge_note": latest_council_note,
+            "backup_setup": backup_setup,
             "disqualified_instruments": disqualified,
         }
 
@@ -217,6 +249,16 @@ class CapitalAdvisor:
             disqualified_md = f"\n### Why Other Indices Were Disqualified on ${data['capital_analyzed']:.0f} Capital\n"
             for dis in data["disqualified_instruments"]:
                 disqualified_md += f"- **{dis['symbol']}**: {dis['reason']}\n"
+
+        backup_md = ""
+        if data.get("backup_setup"):
+            b = data["backup_setup"]
+            backup_md = (
+                f"\n### Next Best Backup Setup (Different Bucket — `{b['bucket']}`)\n"
+                f"| Symbol | Bias | Entry Mode | Lot | Risk | Entry Zone | SL | TP1 | R:R |\n"
+                f"| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                f"| `{b['symbol']}` | {b['direction']} | `{b['entry_mode']}` | {b['lot_size']} | ${b['dollar_risk']:.2f} | {b['entry_zone']} | {b['stop_loss']} | {b['take_profit_1']} | {b['risk_reward_ratio']} |\n"
+            )
 
         return rf"""# 🏛 CAPITAL ADVISOR — ${data['capital_analyzed']:.0f} LIVE EXECUTION BLUEPRINT
 *Auto-updated every hour by the Execution & Risk Desk (`hourly_execution_desk.yml`)*  
@@ -267,6 +309,6 @@ class CapitalAdvisor:
 
 ## ⚠️ 5. GEMINI COUNCIL WARNING / EDGE NOTE
 > *{data['council_edge_note']}*
-
+{backup_md}
 {disqualified_md}
 """

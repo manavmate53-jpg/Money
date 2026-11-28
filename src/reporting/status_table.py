@@ -169,26 +169,46 @@ class StatusTableReporter:
         seen_keys = set()
 
         for a in active:
-            key = (a.get("symbol", ""), str(a.get("opened_at", ""))[:19])
+            sym_a = a.get("symbol", "-")
+            key = (sym_a, str(a.get("opened_at", ""))[:19])
             seen_keys.add(key)
             opened_dt = self._parse_iso_dt(a.get("opened_at"))
+            filled_dt = self._parse_iso_dt(a.get("filled_at"))
             age_h = (now_utc - opened_dt).total_seconds() / 3600.0 if opened_dt else 0.0
+            st_val = str(a.get("status", "-"))
+            if st_val in ("OPEN", "BREAK_EVEN"):
+                anchor_dt = filled_dt or opened_dt
+                stag_h = (now_utc - anchor_dt).total_seconds() / 3600.0 if anchor_dt else 0.0
+                stag_str = f"{stag_h:.1f}h / 16h"
+            else:
+                stag_str = f"{age_h:.1f}h / 4h TTL"
+
+            e_mode = str(a.get("entry_mode") or "LIMIT_PULLBACK")
+            bucket = str(a.get("asset_bucket") or "-")
+            if bucket == "-" and sym_a != "-":
+                from src.risk.bankroll_manager import get_asset_bucket
+                bucket = get_asset_bucket(sym_a)
+
             e_zone = f"{self._fmt_price(a.get('entry_min'))}–{self._fmt_price(a.get('entry_max'))}"
             rows.append([
                 a.get("trade_id", "-"),
-                a.get("symbol", "-"),
+                sym_a,
+                bucket,
                 a.get("direction", "-"),
-                a.get("status", "-"),
+                e_mode,
+                st_val,
                 a.get("lot_size", "-"),
                 f"${float(a.get('dollar_risk', 0.0)):.2f}",
                 e_zone,
                 self._fmt_price(a.get("sl_price")),
                 self._fmt_price(a.get("tp_price")),
+                stag_str,
                 f"{age_h:.1f}h open",
             ])
 
         for p in recent_paper:
-            key = (p.get("symbol", ""), str(p.get("created_at", ""))[:19])
+            sym_p = p.get("symbol", "-")
+            key = (sym_p, str(p.get("created_at", ""))[:19])
             if key in seen_keys:
                 continue
             seen_keys.add(key)
@@ -203,8 +223,8 @@ class StatusTableReporter:
             else:
                 dur_h = 0.0
 
-            if status == "EXPIRED_STALE":
-                outcome_str = f"EXPIRED ({dur_h:.1f}h)"
+            if status in ("EXPIRED_STALE", "TIME_DECAY_EXIT"):
+                outcome_str = f"{status} ({dur_h:.1f}h)"
             elif p.get("realized_r") is not None and p.get("realized_pnl") is not None:
                 outcome_str = f"{float(p['realized_r']):+.2f}R (${float(p['realized_pnl']):+.2f})"
             else:
@@ -213,25 +233,33 @@ class StatusTableReporter:
             stamp = created_dt.strftime("%Y%m%d%H%M%S") if created_dt else str(p.get("trade_id", ""))
             tid_label = f"ORD-#{p['trade_id']} ({stamp[:8]})"
             e_zone = f"{self._fmt_price(p.get('entry_min'))}–{self._fmt_price(p.get('entry_max'))}"
+            e_mode = str(p.get("entry_mode") or "LIMIT_PULLBACK")
+            bucket = str(p.get("asset_bucket") or "-")
+            if bucket == "-" and sym_p != "-":
+                from src.risk.bankroll_manager import get_asset_bucket
+                bucket = get_asset_bucket(sym_p)
             rows.append([
                 tid_label,
-                p.get("symbol", "-"),
+                sym_p,
+                bucket,
                 p.get("direction", "-"),
+                e_mode,
                 status,
                 p.get("lot_size", "-"),
                 f"${float(p.get('dollar_risk', 0.0)):.2f}",
                 e_zone,
                 self._fmt_price(p.get("stop_loss")),
                 self._fmt_price(p.get("take_profit_1")),
+                "-",
                 outcome_str,
             ])
 
         if not rows:
-            rows.append(["None", "-", "-", "IDLE", "-", "$0.00", "-", "-", "-", "No orders recorded"])
+            rows.append(["None", "-", "-", "-", "-", "IDLE", "-", "$0.00", "-", "-", "-", "-", "No orders recorded"])
 
         return self._fmt_table(
             "2. Active & Recent Orders",
-            ["Trade ID", "Symbol", "Bias", "Status", "Lot", "Risk ($)", "Entry Zone", "SL", "TP1", "Age / Outcome"],
+            ["Trade ID", "Symbol", "Bucket", "Bias", "Entry Mode", "Status", "Lot", "Risk ($)", "Entry Zone", "SL", "TP1", "Stagnation Timer", "Age / Outcome"],
             rows,
         )
 
@@ -294,22 +322,28 @@ class StatusTableReporter:
         for sym, info in instruments.items():
             conf = float(info.get("confidence_score", 0.0)) * 100.0
             viable = "✅ YES" if info.get("nano_lot_viable", False) else "❌ NO"
+            hurst_val = info.get("hurst")
+            adx_val = info.get("adx_14")
+            hurst_str = f"{float(hurst_val):.2f}" if hurst_val is not None else "-"
+            adx_str = f"{float(adx_val):.1f}" if adx_val is not None else "-"
             rows.append([
                 sym,
                 info.get("macro_bias", "NEUTRAL"),
                 f"{conf:.0f}%",
                 info.get("primary_regime", "-"),
+                hurst_str,
+                adx_str,
                 viable,
                 self._fmt_price(info.get("key_invalidation_level")),
                 self._fmt_price(info.get("macro_target")),
             ])
 
         if not rows:
-            rows.append(["NONE", "NEUTRAL", "0%", "-", "❌ NO", "-", "-"])
+            rows.append(["NONE", "NEUTRAL", "0%", "-", "-", "-", "❌ NO", "-", "-"])
 
         return self._fmt_table(
             "4. 4H Macro Regime & $100 Account Viability",
-            ["Symbol", "H4 Bias", "Conf.", "Regime", "$100 Nano-Lot Viable", "Invalidation", "Target"],
+            ["Symbol", "H4 Bias", "Conf.", "Regime", "Hurst", "ADX", "$100 Nano-Lot Viable", "Invalidation", "Target"],
             rows,
         )
 

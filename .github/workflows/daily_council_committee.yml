@@ -4,6 +4,8 @@ on:
   schedule:
     # Runs once daily at 23:30 UTC
     - cron: "30 23 * * *"
+  repository_dispatch:
+    types: [run-council-desk]
   workflow_dispatch:
 
 concurrency:

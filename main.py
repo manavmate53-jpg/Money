@@ -32,7 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from src.database.db_manager import DatabaseManager
 from src.risk.pip_calculator import PipCalculator
 from src.risk.position_sizer import PositionSizer
-from src.risk.bankroll_manager import BankrollManager
+from src.risk.bankroll_manager import BankrollManager, get_asset_bucket
 from src.technicals.confluence_engine import ConfluenceEngine
 from src.technicals.smc_ict import SmcIctEngine
 from src.technicals.supply_demand import SupplyDemandEngine
@@ -78,10 +78,12 @@ def cycle_hourly(dry_run: bool = False, capital: float = 100.0) -> dict:
     db = DatabaseManager()
     pip_calc = PipCalculator()
     bankroll = BankrollManager(db)
+    gate = ReadinessGate(db)
+    pa = PriceActionEngine()
     position_sizer = PositionSizer(pip_calc)
     pattern_memory = PatternMemoryEngine(db=db)
     confluence = ConfluenceEngine(pattern_memory=pattern_memory)
-    paper_trader = PaperTrader(db, bankroll, pip_calc, position_sizer=position_sizer)
+    paper_trader = PaperTrader(db, bankroll, pip_calc, position_sizer=position_sizer, readiness_gate=gate)
     post_mortem = PostMortemManager(db, pattern_memory=pattern_memory)
     scraper = DerivScraper()
     ws = DerivWsInterceptor(db)
@@ -132,8 +134,9 @@ def cycle_hourly(dry_run: bool = False, capital: float = 100.0) -> dict:
                     after_screenshots=res.get("after_screenshots")
                 )
 
-    # Avoid stacking duplicate orders on same symbol OR breaching max concurrent cap ($100 = 1 trade)
+    # Enforce 3-bucket uncorrelated paper training (<= $4.50 combined heat) during TRAINING_CALIBRATION, or 1 live slot
     equity_status = bankroll.get_status()
+    is_live_ready = bool(gate.evaluate_metrics(write_report=False).get("is_live_ready", False))
     if bankroll.is_drawdown_breaker_active() or equity_status["active_bankroll"] <= bankroll.get_equity_floor():
         console.print(
             f"[bold red]🛑 DRAWDOWN_CIRCUIT_BREAKER ACTIVE (Equity: ${equity_status['active_bankroll']:.2f} vs "
@@ -141,22 +144,47 @@ def cycle_hourly(dry_run: bool = False, capital: float = 100.0) -> dict:
         )
     else:
         for sym in symbols:
-            max_concurrent = bankroll.get_max_concurrent_positions(bankroll.get_status()["active_bankroll"])
+            cur_equity = bankroll.get_status()["active_bankroll"]
+            limits = bankroll.get_paper_bucket_limits(is_live_ready=is_live_ready, capital=cur_equity)
+            max_concurrent = limits["max_concurrent"]
+            max_per_bucket = limits["max_per_bucket"]
+            max_total_risk = limits["max_total_risk"]
             active_now = db.get_active_trades()
+
             if len(active_now) >= max_concurrent:
                 console.print(f"  [dim cyan]Risk Shield: Max concurrent open positions ({len(active_now)}/{max_concurrent}) reached; skipping new entries.[/dim cyan]")
                 break
             if any(t["symbol"] == sym for t in active_now):
                 continue
 
+            sym_bucket = get_asset_bucket(sym)
+            if sum(1 for t in active_now if (t.get("asset_bucket") or get_asset_bucket(t["symbol"])) == sym_bucket) >= max_per_bucket:
+                console.print(f"  [dim cyan]Bucket Cap: {sym} skipped ({sym_bucket} slot occupied).[/dim cyan]")
+                continue
+
+            current_heat = sum(float(t.get("dollar_risk", 0.0)) for t in active_now)
+            if current_heat >= max_total_risk:
+                console.print(f"  [dim cyan]Portfolio Heat Cap: ${current_heat:.2f} / ${max_total_risk:.2f} utilized.[/dim cyan]")
+                break
+
             df_h1 = ws.get_candles(sym, timeframe="H1", count=150)
             df_m15 = ws.get_candles(sym, timeframe="M15", count=150)
             df_h4 = ws.get_candles(sym, timeframe="H4", count=100)
+            if df_h1 is None or len(df_h1) < 30:
+                continue
 
-            # Check Macro Alignment, Anti-Revenge Cooldown & Tactical Sniper Entry
+            h1_atr = float(pa.calculate_atr(df_h1).iloc[-1])
+
+            # Check Macro Alignment, Anti-Revenge Cooldown, 12h Dedup & Tactical Sniper Entry
             macro_info = macro_data.get(sym, {})
             macro_bias = macro_info.get("macro_bias", "NEUTRAL")
+            macro_conf = macro_info.get("confidence_score")
             hours_since_loss = db.get_hours_since_last_loss(sym)
+            recent_zones = [
+                {**z, "direction": "BULLISH"} for z in db.get_recent_expired_or_stopped_zones(sym, "BULLISH", hours=12.0)
+            ] + [
+                {**z, "direction": "BEARISH"} for z in db.get_recent_expired_or_stopped_zones(sym, "BEARISH", hours=12.0)
+            ]
 
             tip = confluence.generate_tip(
                 sym,
@@ -164,19 +192,27 @@ def cycle_hourly(dry_run: bool = False, capital: float = 100.0) -> dict:
                 m15_df=df_m15,
                 h4_df=df_h4,
                 macro_bias=macro_bias,
+                macro_confidence=macro_conf,
                 hours_since_last_loss=hours_since_loss,
+                recent_expired_or_stopped=recent_zones,
             )
             if tip.direction != "NEUTRAL_NO_TRADE":
                 equity = bankroll.get_status()["active_bankroll"]
-                entry_p = tip.entry_max if tip.direction == "BULLISH" else tip.entry_min
+                entry_p = tip.current_price if tip.entry_mode == "MARKET_CONFIRMATION" else (tip.entry_max if tip.direction == "BULLISH" else tip.entry_min)
                 viab = position_sizer.evaluate_instrument_viability(sym, entry_p, tip.stop_loss, equity)
 
                 if not viab["viable"]:
                     console.print(f"  [dim yellow]Filter: {sym} disqualified for ${equity:.0f} capital: {escape(str(viab['rejection_reason']))}[/dim yellow]")
                     continue
 
+                if (current_heat + viab["actual_dollar_risk"]) > (max_total_risk + 1e-6):
+                    console.print(f"  [dim yellow]Heat Cap: {sym} risk ${viab['actual_dollar_risk']:.2f} exceeds remaining ${max_total_risk - current_heat:.2f} ceiling[/dim yellow]")
+                    continue
+
                 tactical = council.validate_tactical_sniper(sym, macro_bias, {
                     "direction": tip.direction,
+                    "entry_mode": tip.entry_mode,
+                    "asset_bucket": sym_bucket,
                     "confidence": tip.confidence_score,
                     "regime": tip.market_regime,
                     "entry_zone": f"{tip.entry_min}-{tip.entry_max}",
@@ -192,13 +228,14 @@ def cycle_hourly(dry_run: bool = False, capital: float = 100.0) -> dict:
                             lot_size=scaled_lot,
                             dollar_risk=viab["actual_dollar_risk"],
                             margin_req=viab["margin_required"],
-                            scraper=scraper
+                            scraper=scraper,
+                            h1_atr=h1_atr,
                         )
                         if trade_id:
                             results["new_trades"] += 1
-                            console.print(f"  [bold green]★ Sniper Entry Placed ({trade_id}): {sym} {tip.direction} | Lot: {scaled_lot} | Risk: ${viab['actual_dollar_risk']:.2f}[/bold green]")
+                            console.print(f"  [bold green]★ Sniper Entry ({tip.entry_mode} / {sym_bucket}) Placed ({trade_id}): {sym} {tip.direction} | Lot: {scaled_lot} | Risk: ${viab['actual_dollar_risk']:.2f}[/bold green]")
                     else:
-                        console.print(f"  [yellow]★ DRY-RUN Sniper: {sym} {tip.direction} | Lot: {scaled_lot}[/yellow]")
+                        console.print(f"  [yellow]★ DRY-RUN Sniper ({tip.entry_mode}): {sym} {tip.direction} | Lot: {scaled_lot}[/yellow]")
 
     # Refresh reports/LATEST_ADVICE.md
     advice_res = advisor.advise(capital=capital)
@@ -245,11 +282,17 @@ def cycle_macro(symbols_list: list = None) -> dict:
 
         smc_res = smc.analyze(df_h1)
         pa_res = pa.analyze(df_h1)
+        pa_h4 = pa.analyze(df_h4) if (df_h4 is not None and len(df_h4) >= 30) else pa_res
+        reg_m = pa_h4.get("regime_metrics", pa_res.get("regime_metrics", {}))
         liq_res = liq_engine.analyze(df_h1, df_h4=df_h4)
         poi_res = poi_engine.analyze(df_h1, df_h4=df_h4)
 
+        curr_p = float(df_h1["close"].iloc[-1])
+        sl_probe = curr_p - (1.5 * (pa_res["atr_14"] or 1.0))
+        viable_flag, _ = PositionSizer(PipCalculator()).is_viable_for_account(sym, 100.0, curr_p, sl_probe)
+
         summary = {
-            "current_price": float(df_h1["close"].iloc[-1]),
+            "current_price": curr_p,
             "ws_source": scraper.ws_interceptor.last_source,
             "chart_verified_symbol": h1_data.get("verified_symbol_match", False),
             "is_jump_index": sym.startswith("JD"),
@@ -270,8 +313,13 @@ def cycle_macro(symbols_list: list = None) -> dict:
                 "best_bearish_poi": poi_res.get("best_bearish_poi"),
             },
             "price_action": {
-                "regime": pa_res["regime"],
-                "one_time_framing": pa_res["one_time_framing"]["status"],
+                "regime": reg_m.get("regime", pa_res["regime"]),
+                "regime_metrics": reg_m,
+                "hurst": reg_m.get("hurst", 0.5),
+                "adx_14": reg_m.get("adx_14", 0.0),
+                "efficiency_ratio": reg_m.get("efficiency_ratio", 0.0),
+                "quant_confidence": reg_m.get("quant_confidence", 0.55),
+                "one_time_framing": pa_h4["one_time_framing"]["status"],
                 "dealing_range": pa_res["dealing_range"],
                 "sr_polarity_flips": pa_res["sr_polarity_flips"],
                 "atr_14": pa_res["atr_14"]
@@ -280,7 +328,11 @@ def cycle_macro(symbols_list: list = None) -> dict:
 
         eval_res = council.evaluate_macro_regime(sym, summary, image_path=screenshot, model_name="gemini-2.5-flash")
         eval_res["display_name"] = sym
-        eval_res["nano_lot_viable"] = sym in ("STEPINDEX", "JD75", "JD100", "1HZ25V", "1HZ50V", "1HZ10V")
+        eval_res["asset_bucket"] = get_asset_bucket(sym)
+        eval_res["hurst"] = reg_m.get("hurst")
+        eval_res["adx_14"] = reg_m.get("adx_14")
+        eval_res["efficiency_ratio"] = reg_m.get("efficiency_ratio")
+        eval_res["nano_lot_viable"] = viable_flag
         macro_map["instruments"][sym] = eval_res
 
         b_color = "green" if eval_res["macro_bias"] == "BULLISH" else ("red" if eval_res["macro_bias"] == "BEARISH" else "yellow")

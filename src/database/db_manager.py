@@ -241,6 +241,22 @@ class DatabaseManager:
                 PRIMARY KEY (symbol, timeframe, epoch)
             );
             """)
+
+            # Additive column migrations preserving legacy SQLite rows safely
+            migrations = [
+                ("active_trades", "entry_mode", "TEXT DEFAULT 'LIMIT_PULLBACK'"),
+                ("active_trades", "asset_bucket", "TEXT DEFAULT ''"),
+                ("active_trades", "filled_at", "TEXT"),
+                ("active_trades", "max_favorable_r", "REAL DEFAULT 0.0"),
+                ("paper_trades", "entry_mode", "TEXT DEFAULT 'LIMIT_PULLBACK'"),
+                ("paper_trades", "asset_bucket", "TEXT DEFAULT ''"),
+            ]
+            for tbl, col, col_def in migrations:
+                cursor.execute(f"PRAGMA table_info({tbl})")
+                existing = {row[1] for row in cursor.fetchall()}
+                if col not in existing:
+                    cursor.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} {col_def}")
+
             conn.commit()
 
     def set_kv(self, key: str, value: Any):
@@ -274,8 +290,9 @@ class DatabaseManager:
                 entry_min, entry_max, entry_executed, tp_price, sl_price, original_sl,
                 lot_size, dollar_risk, margin_required, total_fund, used_fund,
                 status, before_screenshots_json, trade_reason_summary,
-                w1_who, w2_what, w3_when, w4_where, w5_why, opened_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                w1_who, w2_what, w3_when, w4_where, w5_why, opened_at,
+                entry_mode, asset_bucket, filled_at, max_favorable_r
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 trade_dict["trade_id"], trade_dict["epoch_id"], trade_dict["symbol"], trade_dict["direction"],
                 trade_dict.get("timeframes_used", "H4,H1,M15"), trade_dict.get("strategy_framework", "SMC_ICT"),
@@ -287,7 +304,11 @@ class DatabaseManager:
                 trade_dict.get("trade_reason_summary", ""),
                 trade_dict.get("w1_who", ""), trade_dict.get("w2_what", ""),
                 trade_dict.get("w3_when", ""), trade_dict.get("w4_where", ""),
-                trade_dict.get("w5_why", ""), trade_dict.get("opened_at", datetime.now(timezone.utc).isoformat())
+                trade_dict.get("w5_why", ""), trade_dict.get("opened_at", datetime.now(timezone.utc).isoformat()),
+                trade_dict.get("entry_mode", "LIMIT_PULLBACK"),
+                trade_dict.get("asset_bucket", ""),
+                trade_dict.get("filled_at"),
+                float(trade_dict.get("max_favorable_r", 0.0)),
             ))
             conn.commit()
 
@@ -375,6 +396,56 @@ class DatabaseManager:
             return max(0.0, (datetime.now(timezone.utc) - closed_dt).total_seconds() / 3600.0)
         except Exception:
             return None
+
+    def get_recent_expired_or_stopped_zones(
+        self,
+        symbol: str,
+        direction: str,
+        hours: float = 12.0,
+    ) -> List[Dict[str, Any]]:
+        """
+        Queries paper_trades, profitable_trades, and losing_trades for setups on the same
+        symbol + direction closed or expired within the last `hours` (12h deduplication guard).
+        """
+        from datetime import timedelta
+        cutoff_iso = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        zones: List[Dict[str, Any]] = []
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            SELECT entry_min, entry_max, COALESCE(closed_at, created_at) AS ts, status
+            FROM paper_trades
+            WHERE symbol = ? AND direction = ?
+              AND status IN ('EXPIRED_STALE', 'CLOSED_LOSS', 'CLOSED_WIN', 'TIME_DECAY_EXIT')
+              AND COALESCE(closed_at, created_at) >= ?
+            """, (symbol, direction, cutoff_iso))
+            for r in cursor.fetchall():
+                e_min = float(r["entry_min"])
+                e_max = float(r["entry_max"])
+                zones.append({
+                    "entry_min": e_min,
+                    "entry_max": e_max,
+                    "midpoint": (e_min + e_max) / 2.0,
+                    "timestamp": r["ts"],
+                    "status": r["status"],
+                })
+
+            for tbl, status_tag in (("losing_trades", "CLOSED_LOSS"), ("profitable_trades", "CLOSED_WIN")):
+                cursor.execute(f"""
+                SELECT entry_price, closed_at
+                FROM {tbl}
+                WHERE symbol = ? AND direction = ? AND closed_at >= ?
+                """, (symbol, direction, cutoff_iso))
+                for r in cursor.fetchall():
+                    ep = float(r["entry_price"])
+                    zones.append({
+                        "entry_min": ep,
+                        "entry_max": ep,
+                        "midpoint": ep,
+                        "timestamp": r["closed_at"],
+                        "status": status_tag,
+                    })
+        return zones
 
     def get_active_trades(self) -> List[Dict[str, Any]]:
         with self.get_connection() as conn:

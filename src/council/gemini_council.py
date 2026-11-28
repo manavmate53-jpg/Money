@@ -161,6 +161,11 @@ class GeminiCouncil:
         Evaluates H4/H1 macro bias using Gemini multimodal vision + quantitative telemetry.
         Uses gemini-2.5-flash for per-symbol macro scans by default to stay fast within rate limits.
         """
+        pa_dict = technical_summary.get("price_action", {})
+        rm = pa_dict.get("regime_metrics", {})
+        quant_conf = rm.get("quant_confidence")
+        quant_regime = rm.get("regime") or pa_dict.get("regime")
+
         prompt = f"""
 You are the Macro & Regime Desk Lead for an institutional Deriv Synthetic Indices trading desk.
 Analyze the quantitative telemetry and attached chart image for {symbol}:
@@ -169,6 +174,8 @@ Technical Telemetry:
 {json.dumps(technical_summary, default=str)}
 
 Respond strictly adhering to MacroAnalysisSchema with concrete structural levels and non-generic reasoning.
+Compute a continuous, differentiated confidence_score grounded in the supplied Hurst ({rm.get('hurst', 0.5)}),
+ADX ({rm.get('adx_14', 20.0)}), and Efficiency Ratio ({rm.get('efficiency_ratio', 0.25)}) metrics (do NOT default to 0.80).
 """
         if self.client:
             try:
@@ -187,29 +194,52 @@ Respond strictly adhering to MacroAnalysisSchema with concrete structural levels
                 response, used_model = self._call_with_retry(model_name, contents, config=config, fallback_models=fallback)
                 parsed = json.loads(response.text)
                 parsed["ai_model"] = used_model
+                if quant_conf is not None:
+                    blended = (0.50 * float(parsed.get("confidence_score", quant_conf))) + (0.50 * float(quant_conf))
+                    parsed["confidence_score"] = round(min(0.95, max(0.35, blended)), 3)
+                if quant_regime == "RANDOM_WALK_CHOP":
+                    parsed["primary_regime"] = "RANDOM_WALK_CHOP"
+                    parsed["macro_bias"] = "NEUTRAL"
+                    parsed["confidence_score"] = round(min(0.52, float(parsed.get("confidence_score", 0.48))), 3)
                 return parsed
             except Exception as e:
                 logger.error(f"Macro evaluation fell back to heuristic for {symbol}: {type(e).__name__}: {e}")
 
-        # Deterministic offline fallback
-        regime = technical_summary.get("price_action", {}).get("regime", "ROTATIONAL_RANGE")
+        # Deterministic offline fallback using continuous quantitative metrics
+        regime = quant_regime or "ROTATIONAL_RANGE"
         trend = technical_summary.get("smc_ict", {}).get("structure", {}).get("trend", "NEUTRAL")
+        bias_hint = rm.get("bias_hint")
         curr_price = technical_summary.get("current_price", 2500.0)
-        atr = technical_summary.get("price_action", {}).get("atr_14", 20.0) or 20.0
+        atr = pa_dict.get("atr_14", 20.0) or 20.0
 
-        bias = "BULLISH" if trend == "BULLISH" else ("BEARISH" if trend == "BEARISH" else "NEUTRAL")
+        if regime == "RANDOM_WALK_CHOP":
+            bias = "NEUTRAL"
+        elif trend in ("BULLISH", "BEARISH"):
+            bias = trend
+        elif bias_hint in ("BULLISH", "BEARISH"):
+            bias = bias_hint
+        else:
+            bias = "NEUTRAL"
+
+        conf_out = float(quant_conf) if quant_conf is not None else (0.74 if bias != "NEUTRAL" else 0.48)
+        if bias == "NEUTRAL":
+            conf_out = min(0.54, conf_out)
+
         invalidation = curr_price - (2.0 * atr) if bias == "BULLISH" else curr_price + (2.0 * atr)
         target = curr_price + (4.0 * atr) if bias == "BULLISH" else curr_price - (4.0 * atr)
 
         return {
             "symbol": symbol,
             "macro_bias": bias,
-            "confidence_score": 0.80 if bias != "NEUTRAL" else 0.50,
+            "confidence_score": round(conf_out, 3),
             "primary_regime": regime,
             "h4_structural_zone": f"Zone around {curr_price:.2f}",
             "key_invalidation_level": round(invalidation, 2),
             "macro_target": round(target, 2),
-            "summary_reasoning": f"Deterministic structural bias {bias} derived from {regime} and SMC swing alignment.",
+            "summary_reasoning": (
+                f"Deterministic structural bias {bias} ({regime}; H={rm.get('hurst', 'N/A')}, "
+                f"ADX={rm.get('adx_14', 'N/A')}, ER={rm.get('efficiency_ratio', 'N/A')})."
+            ),
             "ai_model": "heuristic_fallback"
         }
 

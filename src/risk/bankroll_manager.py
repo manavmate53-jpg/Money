@@ -10,6 +10,41 @@ from typing import Dict, Any, Optional
 from src.database.db_manager import DatabaseManager
 
 
+ASSET_BUCKETS: Dict[str, str] = {
+    "JD10": "JUMP_FAMILY",
+    "JD25": "JUMP_FAMILY",
+    "JD50": "JUMP_FAMILY",
+    "JD75": "JUMP_FAMILY",
+    "JD100": "JUMP_FAMILY",
+    "1HZ10V": "VOL_1S_FAMILY",
+    "1HZ25V": "VOL_1S_FAMILY",
+    "1HZ50V": "VOL_1S_FAMILY",
+    "1HZ75V": "VOL_1S_FAMILY",
+    "1HZ100V": "VOL_1S_FAMILY",
+    "STEPINDEX": "STEP_CLASSIC_FAMILY",
+    "STPRNG": "STEP_CLASSIC_FAMILY",
+    "R_10": "STEP_CLASSIC_FAMILY",
+    "R_25": "STEP_CLASSIC_FAMILY",
+    "R_50": "STEP_CLASSIC_FAMILY",
+    "R_75": "STEP_CLASSIC_FAMILY",
+    "R_100": "STEP_CLASSIC_FAMILY",
+    "BOOM1000": "STEP_CLASSIC_FAMILY",
+    "CRASH1000": "STEP_CLASSIC_FAMILY",
+}
+
+
+def get_asset_bucket(symbol: str) -> str:
+    """Maps a Deriv instrument to its uncorrelated asset-family training bucket."""
+    sym = str(symbol or "").upper()
+    if sym in ASSET_BUCKETS:
+        return ASSET_BUCKETS[sym]
+    if sym.startswith("JD"):
+        return "JUMP_FAMILY"
+    if sym.startswith("1HZ"):
+        return "VOL_1S_FAMILY"
+    return "STEP_CLASSIC_FAMILY"
+
+
 class BankrollManager:
     def __init__(self, db: DatabaseManager, policy_path: str = "config/bankroll_policy.json"):
         self.db = db
@@ -53,6 +88,41 @@ class BankrollManager:
         if equity <= 250.0:
             return int(self.policy.get("max_concurrent_positions_small_account", 1))
         return 3
+
+    def get_asset_bucket(self, symbol: str) -> str:
+        bucket_cfg = self.policy.get("paper_training_buckets", {}).get("buckets", {})
+        sym_u = str(symbol or "").upper()
+        for bucket_name, members in bucket_cfg.items():
+            if sym_u in [m.upper() for m in members]:
+                return bucket_name
+        return get_asset_bucket(symbol)
+
+    def get_paper_bucket_limits(self, is_live_ready: bool = False, capital: Optional[float] = None) -> Dict[str, Any]:
+        """
+        During TRAINING_CALIBRATION, allows up to 3 uncorrelated open/pending paper trades
+        (max 1 per asset bucket: JUMP_FAMILY, VOL_1S_FAMILY, STEP_CLASSIC_FAMILY) capped at
+        $4.50 (4.5%) total portfolio risk. Once LIVE_READY, locks strictly to 1 live slot.
+        """
+        equity = float(capital) if capital is not None else float(self.db.get_kv("active_bankroll", 100.0))
+        pb = self.policy.get("paper_training_buckets", {})
+        if not is_live_ready and pb.get("enabled", True):
+            max_conc = int(pb.get("max_concurrent_positions", 3))
+            max_per_b = int(pb.get("max_per_bucket", 1))
+            max_heat_pct = float(pb.get("max_total_risk_percent", 4.5))
+            max_heat_cap = float(pb.get("max_total_risk_dollars", 4.50))
+            max_heat = round(min(max_heat_cap, equity * (max_heat_pct / 100.0)), 2) if equity <= 150.0 else round(equity * (max_heat_pct / 100.0), 2)
+            return {
+                "mode": "TRAINING_3_BUCKET",
+                "max_concurrent": max_conc,
+                "max_per_bucket": max_per_b,
+                "max_total_risk": max_heat,
+            }
+        return {
+            "mode": "LIVE_SINGLE_SLOT",
+            "max_concurrent": self.get_max_concurrent_positions(equity),
+            "max_per_bucket": 1,
+            "max_total_risk": round(equity * (float(self.policy.get("live_hard_cap_risk_percent", 2.0)) / 100.0), 2),
+        }
 
     def _sync_state(self):
         """Initializes or loads active bankroll, vault balance, and current epoch."""

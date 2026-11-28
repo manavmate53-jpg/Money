@@ -114,7 +114,7 @@ def test_40_dollar_drawdown_circuit_breaker_and_1_trade_cap(tmp_path):
     bankroll = BankrollManager(db, policy_path="config/bankroll_policy.json")
     pip_calc = PipCalculator("config/deriv_specs.json")
     sizer = PositionSizer(pip_calc, max_risk_percent=1.5, hard_cap_percent=2.0)
-    trader = PaperTrader(db, bankroll, pip_calc=pip_calc, position_sizer=sizer)
+    trader = PaperTrader(db, bankroll, pip_calc=pip_calc, position_sizer=sizer, enforce_live_single_slot=True)
 
     assert bankroll.get_equity_floor() == 60.0
     assert bankroll.get_max_concurrent_positions(100.0) == 1
