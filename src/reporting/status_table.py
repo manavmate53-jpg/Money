@@ -48,7 +48,7 @@ class StatusTableReporter:
         self.policy_path = policy_path
         self.fetch_remote_ci = fetch_remote_ci
 
-        self.db = DatabaseManager(db_path)
+        self.db = DatabaseManager(db_path, read_only=os.path.exists(db_path))
         self.bankroll = BankrollManager(self.db, policy_path=policy_path)
         self.gate = ReadinessGate(self.db, dashboard_path=dashboard_path)
 

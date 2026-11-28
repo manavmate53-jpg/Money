@@ -19,13 +19,29 @@ from typing import Dict, List, Optional, Any
 
 
 class DatabaseManager:
-    def __init__(self, db_path: str = "data/trading_state.db"):
+    def __init__(
+        self,
+        db_path: str = "data/trading_state.db",
+        read_only: bool = False,
+        reports_dir: Optional[str] = None,
+    ):
         self.db_path = db_path
-        os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
-        self.init_tables()
+        self.read_only = bool(read_only and os.path.exists(db_path))
+        if reports_dir is not None:
+            self.default_reports_dir = reports_dir
+        elif os.path.normpath(db_path) == os.path.normpath("data/trading_state.db"):
+            self.default_reports_dir = "reports"
+        else:
+            self.default_reports_dir = os.path.join(os.path.dirname(os.path.abspath(db_path)), "reports")
+        if not self.read_only:
+            os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
+            self.init_tables()
 
     def get_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        if self.read_only:
+            conn = sqlite3.connect(f"file:{os.path.abspath(self.db_path)}?mode=ro", uri=True)
+        else:
+            conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -358,7 +374,7 @@ class DatabaseManager:
             conn.commit()
 
         # Re-export Markdown Ledgers
-        self.export_all_ledgers()
+        self.export_all_ledgers(reports_dir=self.default_reports_dir)
         return target_table
 
     def get_profitable_trades(self) -> List[Dict[str, Any]]:
@@ -634,12 +650,13 @@ class DatabaseManager:
             conn.commit()
             return cursor.lastrowid
 
-    def export_all_ledgers(self, reports_dir: str = "reports"):
-        """Exports reports/PROFIT_LEDGER.md, LOSS_LEDGER.md, and TRADE_VISUAL_JOURNAL.md."""
-        os.makedirs(reports_dir, exist_ok=True)
-        self.export_profit_ledger(os.path.join(reports_dir, "PROFIT_LEDGER.md"))
-        self.export_loss_ledger(os.path.join(reports_dir, "LOSS_LEDGER.md"))
-        self.export_visual_journal(os.path.join(reports_dir, "TRADE_VISUAL_JOURNAL.md"))
+    def export_all_ledgers(self, reports_dir: Optional[str] = None):
+        """Exports PROFIT_LEDGER.md, LOSS_LEDGER.md, and TRADE_VISUAL_JOURNAL.md."""
+        target_dir = reports_dir or self.default_reports_dir
+        os.makedirs(target_dir, exist_ok=True)
+        self.export_profit_ledger(os.path.join(target_dir, "PROFIT_LEDGER.md"))
+        self.export_loss_ledger(os.path.join(target_dir, "LOSS_LEDGER.md"))
+        self.export_visual_journal(os.path.join(target_dir, "TRADE_VISUAL_JOURNAL.md"))
 
     def export_profit_ledger(self, file_path: str):
         wins = self.get_profitable_trades()

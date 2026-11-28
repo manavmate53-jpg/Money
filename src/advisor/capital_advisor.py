@@ -12,7 +12,7 @@ from typing import Dict, Any, List, Optional
 from src.database.db_manager import DatabaseManager
 from src.risk.pip_calculator import PipCalculator
 from src.risk.position_sizer import PositionSizer
-from src.risk.bankroll_manager import get_asset_bucket
+from src.risk.bankroll_manager import BankrollManager, get_asset_bucket
 from src.technicals.confluence_engine import ConfluenceEngine, TradingTip
 from src.technicals.pattern_memory import PatternMemoryEngine
 from src.browser.ws_interceptor import DerivWsInterceptor
@@ -75,6 +75,73 @@ class CapitalAdvisor:
         locked to 1 primary trade (plus 1 uncorrelated backup setup), and writes reports/LATEST_ADVICE.md.
         """
         readiness = self.gate.evaluate_metrics(write_report=False)
+        bankroll = BankrollManager(self.db)
+        b_stat = bankroll.get_status()
+        equity_floor = float(b_stat.get("hard_equity_floor", 60.0))
+        active_bal = float(b_stat.get("active_bankroll", capital))
+        breaker_active = bool(b_stat.get("drawdown_breaker_active", False))
+
+        # Enforce hard $60.00 ($40 max drawdown) equity floor & circuit breaker in LATEST_ADVICE.md
+        if breaker_active or active_bal <= equity_floor or capital <= equity_floor:
+            halt_reason = (
+                f"HARD_EQUITY_FLOOR_HALT: Active bankroll ${active_bal:.2f} / capital ${capital:.2f} "
+                f"at or below ${equity_floor:.2f} ($40 max-drawdown shield). Live recommendations paused."
+            )
+            halt_tip = TradingTip(
+                symbol="STEPINDEX",
+                direction="NEUTRAL_NO_TRADE",
+                entry_mode="NONE",
+                confidence_score=0.0,
+                primary_strategy="NONE",
+                market_regime="HALTED_EQUITY_SHIELD",
+                current_price=0.0,
+                entry_min=0.0,
+                entry_max=0.0,
+                stop_loss=0.0,
+                take_profit_1=0.0,
+                take_profit_2=0.0,
+                sl_points=0.0,
+                tp1_points=0.0,
+                risk_reward_ratio=0.0,
+                break_even_trigger_price=0.0,
+                estimated_hold_hours=0.0,
+                estimated_hold_candles=0,
+                confluence_reasons=[halt_reason],
+            )
+            halt_res = {
+                "capital_analyzed": capital,
+                "readiness": readiness,
+                "recommended_instrument": "STEPINDEX",
+                "asset_bucket": get_asset_bucket("STEPINDEX"),
+                "entry_mode": "NONE",
+                "direction": "NEUTRAL_NO_TRADE",
+                "market_regime": "HALTED_EQUITY_SHIELD",
+                "primary_strategy": "NONE",
+                "champions_rule": "Hard $60.00 ($40 Max-Drawdown) Equity Shield",
+                "recommended_lot_size": 0.0,
+                "dollar_risk": 0.0,
+                "risk_percent": 0.0,
+                "margin_required": 0.0,
+                "entry_zone": f"HALTED (Equity ${active_bal:.2f} <= ${equity_floor:.2f} floor)",
+                "stop_loss": "N/A (Halted)",
+                "sl_points": "0.00",
+                "take_profit_1": "N/A (Halted)",
+                "take_profit_2": "N/A (Halted)",
+                "risk_reward_ratio": "N/A (Equity Floor Active)",
+                "break_even_trigger": "N/A (Halted)",
+                "hold_time_estimate": "N/A (Halted)",
+                "confluence_reasons": halt_tip.confluence_reasons,
+                "council_edge_note": halt_reason,
+                "backup_setup": None,
+                "disqualified_instruments": [{"symbol": "ALL", "reason": halt_reason, "min_lot_risk": 0.0}],
+            }
+            if report_path:
+                os.makedirs(os.path.dirname(os.path.abspath(report_path)), exist_ok=True)
+                with open(report_path, "w") as f:
+                    f.write(self.generate_markdown_ticket(halt_res))
+            return halt_res
+
+        max_live_risk_dollars = round(capital * 0.015, 2)
         macro_map = self._load_macro_bias_map()
         candidates: List[Dict[str, Any]] = []
         disqualified: List[Dict[str, Any]] = []
@@ -111,10 +178,14 @@ class CapitalAdvisor:
                 risk_percent=1.5
             )
 
-            if not viability["viable"]:
+            if not viability["viable"] or float(viability["actual_dollar_risk"]) > (max_live_risk_dollars + 1e-6):
+                reason_msg = viability["rejection_reason"] or (
+                    f"DISQUALIFIED_ON_${capital:.0f}: Risk ${viability['actual_dollar_risk']:.2f} "
+                    f"exceeds live advisor ${max_live_risk_dollars:.2f} (1.5%) ceiling"
+                )
                 disqualified.append({
                     "symbol": symbol,
-                    "reason": viability["rejection_reason"],
+                    "reason": reason_msg,
                     "min_lot_risk": viability["min_lot_dollar_risk"]
                 })
             else:
@@ -153,23 +224,21 @@ class CapitalAdvisor:
             df_h1 = self.ws.get_candles(symbol, timeframe="H1", count=150)
             df_m15 = self.ws.get_candles(symbol, timeframe="M15", count=150)
             df_h4 = self.ws.get_candles(symbol, timeframe="H4", count=100)
-            tip = self.confluence.generate_tip(
+            probe_tip = self.confluence.generate_tip(
                 symbol, df_h1, m15_df=df_m15, h4_df=df_h4,
                 hours_since_last_loss=self.db.get_hours_since_last_loss(symbol)
             )
-            entry_price = tip.entry_max if tip.direction == "BULLISH" else tip.entry_min
-            viability = self.position_sizer.evaluate_instrument_viability(
-                symbol=symbol,
-                entry_price=entry_price,
-                stop_loss_price=tip.stop_loss,
-                account_equity=capital,
-                risk_percent=1.5
-            )
+            standby_tip = probe_tip.model_copy(update={
+                "direction": "NEUTRAL_NO_TRADE",
+                "entry_mode": "NONE",
+                "primary_strategy": "NONE",
+                "risk_reward_ratio": 0.0,
+            })
             top_candidate = {
                 "symbol": symbol,
-                "tip": tip,
-                "viability": viability,
-                "score": 0.50
+                "tip": standby_tip,
+                "viability": {"viable": False, "recommended_lot": 0.0, "actual_dollar_risk": 0.0, "risk_percent": 0.0, "margin_required": 0.0},
+                "score": 0.0
             }
         else:
             top_candidate = candidates[0]

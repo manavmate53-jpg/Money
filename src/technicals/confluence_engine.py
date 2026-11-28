@@ -564,8 +564,9 @@ class ConfluenceEngine:
         tp1_points = abs(tp1 - entry_ref)
         rr = round(tp1_points / sl_points, 2) if sl_points > 0 else 0.0
 
-        if rr < min_rr:
-            reasons.append(f"Filter: Planned R:R {rr:.2f} below active_filters min_rr_ratio {min_rr:.2f}")
+        min_eff_rr = max(2.0, min_rr) if entry_mode == "MARKET_CONFIRMATION" else min_rr
+        if rr < min_eff_rr:
+            reasons.append(f"Filter: Planned R:R {rr:.2f} below required {min_eff_rr:.2f} ({entry_mode})")
             return self._neutral_tip(symbol, regime, current_price, atr_14, reasons)
 
         # Rule 6: k-NN Historical Analog Pattern Memory Gate

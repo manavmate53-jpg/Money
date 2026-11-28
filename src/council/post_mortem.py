@@ -152,10 +152,10 @@ class PostMortemManager:
         data: Dict[str, Any] = {
             "version": "2.0.0",
             "min_sweep_confirmation_candles": 2,
-            "max_pending_hours": 6,
+            "max_pending_hours": 4,
             "min_rr_ratio": 2.0,
             "atr_sl_buffer_multiplier": 0.5,
-            "entry_zone_m15_atr_width": 0.25,
+            "entry_zone_m15_atr_width": 0.30,
             "require_macro_bias_alignment": True,
             "blocked_regimes_by_symbol": {},
             "symbol_overrides": {},
@@ -190,7 +190,7 @@ class PostMortemManager:
         rec_rr = float(review.get("recommended_min_rr", 2.0))
         flaw = str(review.get("primefx_flaw_detected", "NONE")).upper()
 
-        if outcome == "LOSS":
+        if outcome in ("LOSS", "TIME_DECAY_EXIT"):
             sym_state["losses_in_batch"] = int(sym_state.get("losses_in_batch", 0)) + 1
             pending_recs = sym_state.setdefault("pending_recommendations", [])
             pending_recs.append({

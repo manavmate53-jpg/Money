@@ -383,3 +383,78 @@ def test_fix5_workflows_dispatch_and_status_table_columns(tmp_path):
     assert "| Stagnation Timer |" in out
     assert "| Symbol | H4 Bias | Conf. | Regime | Hurst | ADX | $100 Nano-Lot Viable |" in out
     assert "| 0.63 | 28.4 |" in out
+
+
+def test_audit_status_readonly_advisor_floor_and_time_decay_mutation(tmp_path):
+    """Verifies Step 1/Check 3/4/6 audit remediations cleanly."""
+    import hashlib
+    from src.council.gemini_council import GeminiCouncil
+    from src.council.post_mortem import PostMortemManager
+
+    # 1. StatusTableReporter must keep SQLite bytes bit-for-bit untouched in read_only mode
+    db_file = os.path.join(tmp_path, "readonly_status.db")
+    db = DatabaseManager(db_file)
+    BankrollManager(db)
+    digest_before = hashlib.sha256(open(db_file, "rb").read()).hexdigest()
+    out = render_status_tables(fetch_remote_ci=False, db_path=db_file)
+    assert "1. Bankroll, Calibration & Risk Scoreboard" in out
+    digest_after = hashlib.sha256(open(db_file, "rb").read()).hexdigest()
+    assert digest_before == digest_after
+
+    # 2. CapitalAdvisor must halt when active_bankroll <= $60 floor or drawdown breaker active
+    db.set_kv("active_bankroll", 59.5)
+    mock_ws = MagicMock()
+    h1, _ = _sweep_mss_pair()
+    mock_ws.get_candles.return_value = h1
+    advisor = CapitalAdvisor(db=db, ws_interceptor=mock_ws)
+    halted_adv = advisor.advise(capital=100.0, report_path=os.path.join(tmp_path, "ADVICE_HALT.md"))
+    assert halted_adv["direction"] == "NEUTRAL_NO_TRADE"
+    assert halted_adv["dollar_risk"] == 0.0
+    assert halted_adv["market_regime"] == "HALTED_EQUITY_SHIELD"
+
+    # When healthy, CapitalAdvisor never exceeds $1.50 (1.5% on $100) and never emits unviable fallback
+    db.set_kv("active_bankroll", 100.0)
+    ok_adv = advisor.advise(capital=100.0, report_path=os.path.join(tmp_path, "ADVICE_OK.md"))
+    assert ok_adv["dollar_risk"] <= 1.50
+
+    # 3. ConfluenceEngine explicitly enforces >= 2.0R on MARKET_CONFIRMATION even with min_rr < 2.0 override
+    filters_file = os.path.join(tmp_path, "filters_rr.json")
+    with open(filters_file, "w") as f:
+        json.dump({
+            "version": "2.0.0",
+            "min_rr_ratio": 1.2,
+            "max_pending_hours": 4,
+            "blocked_regimes_by_symbol": {},
+        }, f)
+    h1_s, m15_s = _sweep_mss_pair()
+    ce = ConfluenceEngine(filters_path=filters_file, pattern_memory=PatternMemoryEngine(db=db))
+    tip_mc = ce.generate_tip("STEPINDEX", h1_s, m15_df=m15_s, macro_bias="BULLISH", macro_confidence=0.80)
+    if tip_mc.direction != "NEUTRAL_NO_TRADE":
+        assert tip_mc.risk_reward_ratio >= 2.0
+
+    # 4. PostMortemManager counts TIME_DECAY_EXIT inside Speed-2 n >= 5 batch hard-filter mutations
+    weights_f = os.path.join(tmp_path, "w.json")
+    with open(weights_f, "w") as f:
+        json.dump({"instruments": {}}, f)
+    council = GeminiCouncil(api_key="", notes_file=os.path.join(tmp_path, "notes.md"))
+    council.client = None
+    pm = PostMortemManager(
+        db=db,
+        council=council,
+        weights_path=weights_f,
+        filters_path=filters_file,
+        reports_dir=os.path.join(tmp_path, "rep"),
+        filter_mutation_batch_size=5,
+    )
+    for k in range(4):
+        res_k = pm.process_resolved_trade({
+            "trade_id": f"TRD-TD-{k}", "symbol": "JD75", "outcome": "TIME_DECAY_EXIT",
+            "strategy": "SMC_ICT", "realized_pnl": -0.35, "realized_r": -0.25,
+        })
+        assert res_k["hard_filter_mutated"] is False
+    res_5 = pm.process_resolved_trade({
+        "trade_id": "TRD-TD-5", "symbol": "JD75", "outcome": "TIME_DECAY_EXIT",
+        "strategy": "SMC_ICT", "realized_pnl": -0.40, "realized_r": -0.30,
+    })
+    assert res_5["hard_filter_mutated"] is True
+

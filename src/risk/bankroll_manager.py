@@ -126,6 +126,8 @@ class BankrollManager:
 
     def _sync_state(self):
         """Initializes or loads active bankroll, vault balance, and current epoch."""
+        if getattr(self.db, "read_only", False):
+            return
         active_bankroll = self.db.get_kv("active_bankroll")
         vault_balance = self.db.get_kv("vault_balance")
         epoch_number = self.db.get_kv("epoch_number")
