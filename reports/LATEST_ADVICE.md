@@ -1,6 +1,6 @@
 # 🏛 CAPITAL ADVISOR — $100 LIVE EXECUTION BLUEPRINT
 *Auto-updated every hour by the Execution & Risk Desk (`hourly_execution_desk.yml`)*  
-*Last Refresh: **2026-11-28 11:03:28 UTC***
+*Last Refresh: **2026-11-28 12:03:31 UTC***
 
 ---
 
@@ -17,10 +17,10 @@
 ---
 
 ## 🎯 2. #1 RECOMMENDED INSTRUMENT
-- **Instrument**: **`STEPINDEX`** *(Ranked #1 for $100 capital)*
-- **Directional Bias**: **NEUTRAL_NO_TRADE**
+- **Instrument**: **`R_100`** *(Ranked #1 for $100 capital)*
+- **Directional Bias**: **BEARISH**
 - **Market Regime**: `DIRECTIONAL_TREND`
-- **Primary Strategy**: `NONE`
+- **Primary Strategy**: `SMC_ICT`
 - **Champion Rule Alignment**: *PrimeFX Pure Price-Action + Liquidity Playbook*
 
 ---
@@ -28,20 +28,25 @@
 ## 🎫 3. EXACT EXECUTION TICKET
 | Parameter | Exact Value | Notes |
 | :--- | :--- | :--- |
-| **Recommended Lot Size** | **`0.0 lots`** | Granular nano-lot execution |
-| **Dollar Risk ($)** | **`$0.00`** | **0.0%** of $100 equity |
-| **Required Margin** | `$0.00` | Leverage 1:1000 |
-| **Entry Zone** | **`STANDBY @ 7423.50 (Awaiting H4 Confluence)`** | Structural ATR-calibrated entry band |
-| **Stop Loss (SL)** | **`N/A (Standby)`** | 0.00 points distance |
-| **Take Profit 1 (TP1)** | **`N/A (Standby)`** | Planned R:R: **N/A (No Active Setup)** |
-| **Take Profit 2 (TP2)** | **`N/A (Standby)`** | Major liquidity pool |
-| **Cover-Risk-to-Zero** | **`N/A (Standby)`** | Ratchet SL to Break-Even at $+1.0R$ |
-| **Estimated Hold Time** | **N/A (Awaiting Valid Entry)** | Based on $\text{ATR}_{14}$ velocity |
+| **Recommended Lot Size** | **`0.52 lots`** | Granular nano-lot execution |
+| **Dollar Risk ($)** | **`$1.49`** | **1.49%** of $100 equity |
+| **Required Margin** | `$0.19` | Leverage 1:1000 |
+| **Entry Zone** | **`362.54 - 363.62`** | Structural ATR-calibrated entry band |
+| **Stop Loss (SL)** | **`365.40`** | 2.86 points distance |
+| **Take Profit 1 (TP1)** | **`355.39`** | Planned R:R: **1:2.5** |
+| **Take Profit 2 (TP2)** | **`353.29`** | Major liquidity pool |
+| **Cover-Risk-to-Zero** | **`359.68 (+1.0R displacement)`** | Ratchet SL to Break-Even at $+1.0R$ |
+| **Estimated Hold Time** | **1.0 hours (1 bars)** | Based on $\text{ATR}_{14}$ velocity |
 
 ---
 
 ## 🔍 4. CONFLUENCE SIGNALS
-- VOLATILITY_SHOCK_PAUSE (2 H1 bars): Single-candle range spike 4.78x > 3.0x ATR_14
+- Structure: Bearish LL/LH structure progression
+- M15 MSS: Bearish body close shift below 361.20
+- POI: H1 BULLISH_OB [352.84-358.57] (CLEAR_DIRECT_POI)
+- POI: H4 BEARISH_FVG [364.37-381.76] (CLEAR_DIRECT_POI)
+- Candlestick Trigger: BEARISH_ENGULFING
+- k-NN Analogs (k=20): 50.0% win rate, +0.75R avg
 
 ---
 
@@ -50,8 +55,5 @@
 
 
 ### Why Other Indices Were Disqualified on $100 Capital
-- **1HZ100V**: DISQUALIFIED_ON_$100: Minimum lot 0.2 on 1HZ100V with 11.10 pt SL risks $2.22 (2.2%), exceeding $2.00 hard cap.
-- **R_100**: DISQUALIFIED_ON_$100: Minimum lot 0.5 on R_100 with 6.38 pt SL risks $3.19 (3.2%), exceeding $2.00 hard cap.
-- **BOOM1000**: DISQUALIFIED_ON_$100: Minimum lot 0.2 on BOOM1000 with 39.86 pt SL risks $7.97 (8.0%), exceeding $2.00 hard cap.
-- **CRASH1000**: DISQUALIFIED_ON_$100: Minimum lot 0.2 on CRASH1000 with 11.16 pt SL risks $2.23 (2.2%), exceeding $2.00 hard cap.
+- **CRASH1000**: DISQUALIFIED_ON_$100: Minimum lot 0.2 on CRASH1000 with 21.67 pt SL risks $4.33 (4.3%), exceeding $2.00 hard cap.
 
