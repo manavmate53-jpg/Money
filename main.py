@@ -101,12 +101,24 @@ def cycle_hourly(dry_run: bool = False, capital: float = 100.0) -> dict:
     results = {"resolved_trades": 0, "expired_trades": 0, "new_trades": 0}
 
     # First resolve/expire ALL open positions across all active symbols BEFORE scanning new entries
-    active_symbols = {t["symbol"] for t in db.get_active_trades()} | set(symbols)
+    active_trades_all = db.get_active_trades()
+    active_symbols = {t["symbol"] for t in active_trades_all}
     for act_sym in sorted(active_symbols):
-        if not any(t["symbol"] == act_sym for t in db.get_active_trades()):
-            continue
+        sym_trades = [t for t in active_trades_all if t["symbol"] == act_sym]
+        max_age_h = 8.0
+        now_utc = datetime.now(timezone.utc)
+        for st in sym_trades:
+            try:
+                odt = datetime.fromisoformat(st["opened_at"])
+                if odt.tzinfo is None:
+                    odt = odt.replace(tzinfo=timezone.utc)
+                max_age_h = max(max_age_h, (now_utc - odt).total_seconds() / 3600.0 + 2.0)
+            except Exception:
+                pass
+        m15_bars_needed = min(1000, max(150, int(max_age_h * 4) + 16))
         df_act = ws.get_candles(act_sym, timeframe="H1", count=150)
-        resolved_act = paper_trader.update_open_positions(act_sym, df_act, scraper=scraper)
+        df_act_m15 = ws.get_candles(act_sym, timeframe="M15", count=m15_bars_needed)
+        resolved_act = paper_trader.update_open_positions(act_sym, df_act, scraper=scraper, m15_df=df_act_m15)
         for res in resolved_act:
             if res["outcome"] == "EXPIRED_STALE":
                 results["expired_trades"] += 1
@@ -414,67 +426,16 @@ def cmd_advise(capital: float = 100.0):
     console.print(panel)
 
 
-def cmd_status():
-    """Displays terminal dashboard of active trades, vault balance, and readiness gate."""
-    load_environment()
-    db = DatabaseManager()
-    bankroll = BankrollManager(db)
-    gate = ReadinessGate(db)
+def cmd_status(fetch_remote_ci: bool = True):
+    """Prints the structured 5-table Markdown status report."""
+    from src.reporting.status_table import render_status_tables
 
-    b_stat = bankroll.get_status()
-    r_stat = gate.evaluate_metrics(write_report=False)
-
-    console.print(Panel(
-        f"[bold white]Active Trading Bankroll:[/bold white] [bold green]${b_stat['active_bankroll']:.2f}[/bold green] | "
-        f"[bold white]Locked Profit Vault:[/bold white] [bold gold1]${b_stat['vault_balance']:.2f}[/bold gold1] | "
-        f"[bold white]Total Equity:[/bold white] [bold cyan]${b_stat['total_accumulated_capital']:.2f}[/bold cyan] | "
-        f"[bold white]Simulation Epoch:[/bold white] #{b_stat['epoch_number']}\n"
-        f"[bold white]Calibration Status:[/bold white] [bold yellow]{r_stat['status']}[/bold yellow] | "
-        f"[bold white]Win Rate:[/bold white] {r_stat['win_rate']*100:.1f}% | "
-        f"[bold white]Profit Factor:[/bold white] {r_stat['profit_factor']:.2f} | "
-        f"[bold white]Max Drawdown:[/bold white] {r_stat['max_drawdown_percent']:.1f}%",
-        title="[bold cyan]AUTONOMOUS DERIV BOT — SYSTEM DASHBOARD[/bold cyan]",
-        border_style="cyan"
-    ))
-
-    trades = db.get_active_trades()
-    n_wins = len(db.get_profitable_trades())
-    n_losses = len(db.get_losing_trades())
-    console.print(f"[dim]Repository Ledgers: [green]{n_wins} Wins[/green] in reports/PROFIT_LEDGER.md | [red]{n_losses} Losses[/red] in reports/LOSS_LEDGER.md | Visuals in reports/TRADE_VISUAL_JOURNAL.md[/dim]")
-
-    table = Table(title="Active Virtual Positions")
-    table.add_column("ID", justify="right")
-    table.add_column("Symbol", style="cyan")
-    table.add_column("Direction", style="bold")
-    table.add_column("Lot", justify="right")
-    table.add_column("Entry Exec", justify="right")
-    table.add_column("SL", justify="right", style="red")
-    table.add_column("TP1", justify="right", style="green")
-    table.add_column("Status", style="yellow")
-    table.add_column("Risk ($)", justify="right")
-
-    for t in trades:
-        table.add_row(
-            str(t["trade_id"]),
-            t["symbol"],
-            t["direction"],
-            str(t["lot_size"]),
-            str(t.get("entry_executed") or "-"),
-            str(t.get("sl_price", t.get("stop_loss", "-"))),
-            str(t.get("tp_price", t.get("take_profit_1", "-"))),
-            t["status"],
-            f"${t['dollar_risk']:.2f}"
-        )
-
-    if trades:
-        console.print(table)
-    else:
-        console.print("[dim italic]No active open positions.[/dim italic]")
+    print(render_status_tables(fetch_remote_ci=fetch_remote_ci))
 
 
 def main():
     parser = argparse.ArgumentParser(description="Autonomous Deriv Trading Bot & Hedge-Fund Multi-Cadence System")
-    parser.add_argument("--cycle", choices=["hourly", "macro", "council", "advise", "full_scan"], default=None,
+    parser.add_argument("--cycle", choices=["hourly", "macro", "council", "advise", "status", "full_scan"], default=None,
                         help="Execute a specific hedge-fund cadence desk")
     parser.add_argument("--capital", type=float, default=100.0, help="Account capital in USD (default: 100)")
     parser.add_argument("--dry-run", action="store_true", help="Execute without submitting virtual orders")
@@ -502,6 +463,8 @@ def main():
             cycle_council()
         elif args.cycle == "advise":
             cmd_advise(args.capital)
+        elif args.cycle == "status":
+            cmd_status()
         elif args.cycle == "full_scan":
             cycle_macro()
             cycle_hourly(dry_run=args.dry_run, capital=args.capital)

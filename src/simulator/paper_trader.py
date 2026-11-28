@@ -192,12 +192,18 @@ class PaperTrader:
 
         return trade_id
 
-    def update_open_positions(self, symbol: str, current_df: pd.DataFrame, scraper: Any = None) -> List[Dict[str, Any]]:
+    def update_open_positions(
+        self,
+        symbol: str,
+        current_df: pd.DataFrame,
+        scraper: Any = None,
+        m15_df: Optional[pd.DataFrame] = None,
+    ) -> List[Dict[str, Any]]:
         """
         Evaluates active trades for `symbol`:
-        - Cancels PENDING_ENTRY orders older than max_pending_hours (6h TTL) or invalidated pre-entry
-        - Fills valid pending entries cleanly
-        - Ratchets SL to Break-Even at +1.0R
+        - Evaluates M15 candles strictly inside [opened_at, opened_at + max_pending_hours] BEFORE
+          declaring EXPIRED_STALE so delayed-cron runs never miss valid fills inside the 6h TTL window
+        - Ratchets SL to Break-Even at +1.0R across [fill_time, now_utc]
         - Resolves TP/SL hits, captures AFTER charts, updates Vault & split profit/loss tables
         """
         active_scraper = scraper or self.scraper
@@ -212,11 +218,15 @@ class PaperTrader:
             """, (symbol,))
             trades = [dict(row) for row in cursor.fetchall()]
 
-        if not trades or len(current_df) == 0:
+        eval_df = m15_df if (m15_df is not None and len(m15_df) > 0) else current_df
+        if not trades or eval_df is None or len(eval_df) == 0:
             return resolved_trades
 
-        recent_candles = current_df.tail(15)
+        eval_df = eval_df.copy()
+        if "epoch" in eval_df.columns:
+            eval_df = eval_df.sort_values("epoch").reset_index(drop=True)
         now_utc = datetime.now(timezone.utc)
+        now_ts = now_utc.timestamp()
 
         for trade in trades:
             t_id = trade["trade_id"]
@@ -229,15 +239,57 @@ class PaperTrader:
             entry_max = trade["entry_max"]
             status = trade["status"]
 
-            # Pre-loop TTL expiry check for stale PENDING_ENTRY orders
-            if status == "PENDING_ENTRY":
-                try:
-                    opened_dt = datetime.fromisoformat(trade["opened_at"])
-                    if opened_dt.tzinfo is None:
-                        opened_dt = opened_dt.replace(tzinfo=timezone.utc)
-                    age_hours = (now_utc - opened_dt).total_seconds() / 3600.0
-                    if age_hours >= max_pending_hours:
-                        reason = f"EXPIRED_STALE ({age_hours:.1f}h >= {max_pending_hours:.0f}h TTL)"
+            try:
+                opened_dt = datetime.fromisoformat(trade["opened_at"])
+                if opened_dt.tzinfo is None:
+                    opened_dt = opened_dt.replace(tzinfo=timezone.utc)
+            except Exception:
+                opened_dt = now_utc
+
+            opened_ts = opened_dt.timestamp()
+            ttl_deadline_ts = opened_ts + (max_pending_hours * 3600.0)
+            age_hours = max(0.0, (now_ts - opened_ts) / 3600.0)
+
+            has_aligned_epochs = (
+                "epoch" in eval_df.columns
+                and len(eval_df) > 0
+                and float(eval_df["epoch"].max()) >= (opened_ts - 86400.0)
+            )
+
+            if has_aligned_epochs:
+                relevant = eval_df[eval_df["epoch"].astype(float) >= (opened_ts - 60.0)]
+                if len(relevant) == 0:
+                    relevant = eval_df.tail(15)
+            else:
+                relevant = eval_df.tail(15)
+
+            # Partition aligned candles into valid [opened_at, opened_at + 6h] window vs post-TTL
+            expired_early = False
+            if status == "PENDING_ENTRY" and not has_aligned_epochs and age_hours >= max_pending_hours:
+                reason = f"EXPIRED_STALE ({age_hours:.1f}h >= {max_pending_hours:.0f}h TTL)"
+                self.db.mark_trade_expired(t_id, reason=reason)
+                logger.info(f"Expired stale pending order {t_id} on {symbol}: {reason}")
+                resolved_trades.append({
+                    "trade_id": t_id,
+                    "symbol": symbol,
+                    "outcome": "EXPIRED_STALE",
+                    "reason": reason,
+                    "realized_pnl": 0.0,
+                    "realized_r": 0.0,
+                })
+                continue
+
+            closed_or_invalidated = False
+            for _, candle in relevant.iterrows():
+                c_ts = float(candle["epoch"]) if "epoch" in candle.index and candle["epoch"] is not None else opened_ts
+                c_high = float(candle["high"])
+                c_low = float(candle["low"])
+
+                # 1. PENDING_ENTRY evaluation strictly inside [opened_at, opened_at + 6h TTL]
+                if status == "PENDING_ENTRY":
+                    if has_aligned_epochs and c_ts > ttl_deadline_ts:
+                        # Outside 6h TTL window without ever touching [entry_min, entry_max]
+                        reason = f"EXPIRED_STALE ({age_hours:.1f}h >= {max_pending_hours:.0f}h TTL; unfilled inside 6h window)"
                         self.db.mark_trade_expired(t_id, reason=reason)
                         logger.info(f"Expired stale pending order {t_id} on {symbol}: {reason}")
                         resolved_trades.append({
@@ -248,16 +300,10 @@ class PaperTrader:
                             "realized_pnl": 0.0,
                             "realized_r": 0.0,
                         })
-                        continue
-                except Exception:
-                    pass
+                        closed_or_invalidated = True
+                        expired_early = True
+                        break
 
-            for _, candle in recent_candles.iterrows():
-                c_high = float(candle["high"])
-                c_low = float(candle["low"])
-
-                # 1. Check Pre-Entry Structural SL Invalidation BEFORE Entry Fill
-                if status == "PENDING_ENTRY":
                     pre_invalidated = (
                         (direction == "BULLISH" and c_low <= orig_sl)
                         or (direction == "BEARISH" and c_high >= orig_sl)
@@ -274,16 +320,37 @@ class PaperTrader:
                             "realized_pnl": 0.0,
                             "realized_r": 0.0,
                         })
+                        closed_or_invalidated = True
+                        expired_early = True
                         break
 
-                    # Check entry zone fill
+                    # Check limit zone fill strictly inside valid 6h TTL window
                     if c_low <= entry_max and c_high >= entry_min:
                         status = "OPEN"
                         fill_p = (entry_min + entry_max) / 2.0
+                        fill_iso = (
+                            datetime.fromtimestamp(c_ts, tz=timezone.utc).isoformat()
+                            if has_aligned_epochs
+                            else now_utc.isoformat()
+                        )
                         trade["entry_executed"] = fill_p
                         trade["status"] = "OPEN"
                         with self.db.get_connection() as conn:
-                            conn.execute("UPDATE active_trades SET status = 'OPEN', entry_executed = ? WHERE trade_id = ?", (fill_p, t_id))
+                            conn.execute(
+                                "UPDATE active_trades SET status = 'OPEN', entry_executed = ? WHERE trade_id = ?",
+                                (fill_p, t_id),
+                            )
+                            conn.execute(
+                                """
+                                UPDATE paper_trades
+                                SET status = 'OPEN', entry_executed = ?, entry_time = ?
+                                WHERE trade_id = (
+                                    SELECT MAX(trade_id) FROM paper_trades
+                                    WHERE symbol = ? AND status = 'PENDING_ENTRY'
+                                )
+                                """,
+                                (fill_p, fill_iso, symbol),
+                            )
                             conn.commit()
                     else:
                         continue
@@ -329,7 +396,8 @@ class PaperTrader:
                 if hit_tp or hit_sl:
                     dollar_pnl = self.pip_calc.calculate_pnl(direction, fill_price, exit_price, lot, symbol)
                     r_mult = round((exit_price - fill_price) / sl_dist if direction == "BULLISH" else (fill_price - exit_price) / sl_dist, 2)
-                    now_iso = datetime.now(timezone.utc).isoformat()
+                    exit_dt = datetime.fromtimestamp(c_ts, tz=timezone.utc) if has_aligned_epochs else now_utc
+                    now_iso = exit_dt.isoformat()
 
                     self.bankroll.process_trade_result(dollar_pnl, r_mult, symbol)
                     b_status = self.bankroll.get_status()
@@ -356,10 +424,7 @@ class PaperTrader:
                             logger.warning(f"AFTER screenshot capture failed for {t_id}: {e}")
                             after_screens = {}
 
-                    opened_dt = datetime.fromisoformat(trade["opened_at"])
-                    if opened_dt.tzinfo is None:
-                        opened_dt = opened_dt.replace(tzinfo=timezone.utc)
-                    hold_hours = round(max(0.5, (datetime.now(timezone.utc) - opened_dt).total_seconds() / 3600.0), 1)
+                    hold_hours = round(max(0.25, (exit_dt - opened_dt).total_seconds() / 3600.0), 1)
 
                     closed_dict = {
                         "trade_id": t_id,
@@ -418,6 +483,22 @@ class PaperTrader:
                         "before_screenshots": closed_dict["before_screenshots"],
                         "after_screenshots": after_screens
                     })
+                    closed_or_invalidated = True
                     break
+
+            # If all available candles fell inside [opened_at, opened_at + 6h] without filling AND
+            # wall-clock time has now passed the 6h TTL deadline, expire stale cleanly
+            if not closed_or_invalidated and not expired_early and status == "PENDING_ENTRY" and age_hours >= max_pending_hours:
+                reason = f"EXPIRED_STALE ({age_hours:.1f}h >= {max_pending_hours:.0f}h TTL; unfilled inside 6h window)"
+                self.db.mark_trade_expired(t_id, reason=reason)
+                logger.info(f"Expired stale pending order {t_id} on {symbol}: {reason}")
+                resolved_trades.append({
+                    "trade_id": t_id,
+                    "symbol": symbol,
+                    "outcome": "EXPIRED_STALE",
+                    "reason": reason,
+                    "realized_pnl": 0.0,
+                    "realized_r": 0.0,
+                })
 
         return resolved_trades
