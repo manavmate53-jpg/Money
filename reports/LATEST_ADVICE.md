@@ -1,6 +1,6 @@
 # 🏛 CAPITAL ADVISOR — $100 LIVE EXECUTION BLUEPRINT
 *Auto-updated every hour by the Execution & Risk Desk (`hourly_execution_desk.yml`)*  
-*Last Refresh: **2026-11-28 10:39:26 UTC***
+*Last Refresh: **2026-11-28 11:03:28 UTC***
 
 ---
 
@@ -50,6 +50,8 @@
 
 
 ### Why Other Indices Were Disqualified on $100 Capital
-- **JD10**: DISQUALIFIED_ON_$100: Minimum lot 0.01 on JD10 with 178.43 pt SL (x1.50 Jump gap buffer=267.64 pt) risks $2.68 (2.7%), exceeding $2.00 hard cap.
-- **CRASH1000**: DISQUALIFIED_ON_$100: Minimum lot 0.2 on CRASH1000 with 13.36 pt SL risks $2.67 (2.7%), exceeding $2.00 hard cap.
+- **1HZ100V**: DISQUALIFIED_ON_$100: Minimum lot 0.2 on 1HZ100V with 11.10 pt SL risks $2.22 (2.2%), exceeding $2.00 hard cap.
+- **R_100**: DISQUALIFIED_ON_$100: Minimum lot 0.5 on R_100 with 6.38 pt SL risks $3.19 (3.2%), exceeding $2.00 hard cap.
+- **BOOM1000**: DISQUALIFIED_ON_$100: Minimum lot 0.2 on BOOM1000 with 39.86 pt SL risks $7.97 (8.0%), exceeding $2.00 hard cap.
+- **CRASH1000**: DISQUALIFIED_ON_$100: Minimum lot 0.2 on CRASH1000 with 11.16 pt SL risks $2.23 (2.2%), exceeding $2.00 hard cap.
 
