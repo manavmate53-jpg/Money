@@ -1,6 +1,6 @@
 # 🏛 CAPITAL ADVISOR — $100 LIVE EXECUTION BLUEPRINT
 *Auto-updated every hour by the Execution & Risk Desk (`hourly_execution_desk.yml`)*  
-*Last Refresh: **2026-11-28 12:03:31 UTC***
+*Last Refresh: **2026-11-28 13:03:33 UTC***
 
 ---
 
@@ -17,7 +17,7 @@
 ---
 
 ## 🎯 2. #1 RECOMMENDED INSTRUMENT
-- **Instrument**: **`R_100`** *(Ranked #1 for $100 capital)*
+- **Instrument**: **`JD100`** *(Ranked #1 for $100 capital)*
 - **Directional Bias**: **BEARISH**
 - **Market Regime**: `DIRECTIONAL_TREND`
 - **Primary Strategy**: `SMC_ICT`
@@ -28,25 +28,24 @@
 ## 🎫 3. EXACT EXECUTION TICKET
 | Parameter | Exact Value | Notes |
 | :--- | :--- | :--- |
-| **Recommended Lot Size** | **`0.52 lots`** | Granular nano-lot execution |
-| **Dollar Risk ($)** | **`$1.49`** | **1.49%** of $100 equity |
-| **Required Margin** | `$0.19` | Leverage 1:1000 |
-| **Entry Zone** | **`362.54 - 363.62`** | Structural ATR-calibrated entry band |
-| **Stop Loss (SL)** | **`365.40`** | 2.86 points distance |
-| **Take Profit 1 (TP1)** | **`355.39`** | Planned R:R: **1:2.5** |
-| **Take Profit 2 (TP2)** | **`353.29`** | Major liquidity pool |
-| **Cover-Risk-to-Zero** | **`359.68 (+1.0R displacement)`** | Ratchet SL to Break-Even at $+1.0R$ |
-| **Estimated Hold Time** | **1.0 hours (1 bars)** | Based on $\text{ATR}_{14}$ velocity |
+| **Recommended Lot Size** | **`2.08 lots`** | Granular nano-lot execution |
+| **Dollar Risk ($)** | **`$1.50`** | **1.5%** of $100 equity |
+| **Required Margin** | `$0.07` | Leverage 1:1000 |
+| **Entry Zone** | **`34.41 - 34.51`** | Structural ATR-calibrated entry band |
+| **Stop Loss (SL)** | **`34.89`** | 0.48 points distance |
+| **Take Profit 1 (TP1)** | **`33.21`** | Planned R:R: **1:2.5** |
+| **Take Profit 2 (TP2)** | **`32.49`** | Major liquidity pool |
+| **Cover-Risk-to-Zero** | **`33.93 (+1.0R displacement)`** | Ratchet SL to Break-Even at $+1.0R$ |
+| **Estimated Hold Time** | **1.2 hours (1 bars)** | Based on $\text{ATR}_{14}$ velocity |
 
 ---
 
 ## 🔍 4. CONFLUENCE SIGNALS
 - Structure: Bearish LL/LH structure progression
-- M15 MSS: Bearish body close shift below 361.20
-- POI: H1 BULLISH_OB [352.84-358.57] (CLEAR_DIRECT_POI)
-- POI: H4 BEARISH_FVG [364.37-381.76] (CLEAR_DIRECT_POI)
-- Candlestick Trigger: BEARISH_ENGULFING
-- k-NN Analogs (k=20): 50.0% win rate, +0.75R avg
+- M15 MSS: Bearish body close shift below 34.30
+- POI: H4 BEARISH_FVG [36.92-37.72] (CLEAR_DIRECT_POI)
+- Pure PA: Support-to-Resistance polarity flip @ 34.19
+- k-NN Analogs (k=20): 55.0% win rate, +0.93R avg
 
 ---
 
@@ -55,5 +54,6 @@
 
 
 ### Why Other Indices Were Disqualified on $100 Capital
-- **CRASH1000**: DISQUALIFIED_ON_$100: Minimum lot 0.2 on CRASH1000 with 21.67 pt SL risks $4.33 (4.3%), exceeding $2.00 hard cap.
+- **1HZ10V**: DISQUALIFIED_ON_$100: Minimum lot 0.2 on 1HZ10V with 12.24 pt SL risks $2.45 (2.4%), exceeding $2.00 hard cap.
+- **1HZ100V**: DISQUALIFIED_ON_$100: Minimum lot 0.2 on 1HZ100V with 24.44 pt SL risks $4.89 (4.9%), exceeding $2.00 hard cap.
 
