@@ -458,3 +458,68 @@ def test_audit_status_readonly_advisor_floor_and_time_decay_mutation(tmp_path):
     })
     assert res_5["hard_filter_mutated"] is True
 
+
+def test_m15_execution_sl_and_nano_lot_viability_not_h4_invalidation(tmp_path):
+    """
+    Verifies $100 Nano-Lot Viability (Table 4, ConfluenceEngine, CapitalAdvisor) uses
+    M15 intraday execution stop (min_lot * point_value * 1.5 * ATR_14_M15 * jump_mult <= $2.00)
+    rather than wide H4 macro invalidation / H1 swings.
+    """
+    # 1. ConfluenceEngine uses M15 ATR when m15_df is provided even if H1 ATR is very wide
+    wide_h1 = _trend_df(n=100, base=7000.0, step=8.0, freq_min=60)
+    # Give wide H1 wicks (ATR ~ 48 pt) while M15 stays calm (ATR ~ 4 pt)
+    wide_h1["high"] = wide_h1["high"] + 22.0
+    wide_h1["low"] = wide_h1["low"] - 22.0
+    calm_m15 = _trend_df(n=100, base=float(wide_h1["close"].iloc[-1]) - 60.0, step=0.8, freq_min=15)
+
+    db = DatabaseManager(os.path.join(tmp_path, "m15_viab.db"))
+    BankrollManager(db)
+    ce = ConfluenceEngine(pattern_memory=PatternMemoryEngine(db=db))
+    tip = ce.generate_tip("STEPINDEX", wide_h1, m15_df=calm_m15, macro_bias="BULLISH")
+    if tip.direction == "BULLISH":
+        # Must NOT inflate to ~70pt wide H1/H4 SL; must stay calibrated to calm M15 execution ATR
+        assert tip.sl_points <= 20.0
+        assert (0.10 * tip.sl_points) <= 2.00
+
+    # 2. StatusTableReporter Table 4 computes M15 viability from cached M15 candles
+    #    (overriding stale false/wide H4 flag) AND keeps 1.50x Jump gap buffer on JD10
+    now_ep = int(datetime.now(timezone.utc).timestamp())
+    with db.get_connection() as conn:
+        # STEPINDEX M15 with ATR = 5.0 -> 1.5 * 5.0 = 7.5pt * $0.10 = $0.75 <= $2.00 -> YES
+        for i in range(25):
+            conn.execute(
+                "INSERT INTO candles (symbol, timeframe, epoch, open, high, low, close, volume) VALUES (?, 'M15', ?, ?, ?, ?, ?, 100)",
+                ("STEPINDEX", now_ep - (25 - i) * 900, 7400.0, 7402.5, 7397.5, 7401.0),
+            )
+        # JD10 M15 with ATR = 100.0 -> 1.5 * 100 * 1.50 (Jump) * 0.01 = $2.25 > $2.00 -> NO
+        for i in range(25):
+            conn.execute(
+                "INSERT INTO candles (symbol, timeframe, epoch, open, high, low, close, volume) VALUES (?, 'M15', ?, ?, ?, ?, ?, 100)",
+                ("JD10", now_ep - (25 - i) * 900, 89600.0, 89650.0, 89550.0, 89610.0),
+            )
+        conn.commit()
+
+    macro_f = os.path.join(tmp_path, "macro_m15.json")
+    with open(macro_f, "w") as f:
+        json.dump({
+            "instruments": {
+                "STEPINDEX": {
+                    "macro_bias": "BULLISH", "confidence_score": 0.87, "primary_regime": "DIRECTIONAL_TREND",
+                    "hurst": 0.73, "adx_14": 82.5, "nano_lot_viable": False,
+                    "key_invalidation_level": 7272.02, "macro_target": 7459.21,
+                },
+                "JD10": {
+                    "macro_bias": "BEARISH", "confidence_score": 0.58, "primary_regime": "ROTATIONAL_RANGE",
+                    "hurst": 0.68, "adx_14": 23.7, "nano_lot_viable": True,
+                    "key_invalidation_level": 89967.87, "macro_target": 89280.02,
+                },
+            }
+        }, f)
+
+    out = render_status_tables(fetch_remote_ci=False, db_path=os.path.join(tmp_path, "m15_viab.db"), macro_bias_path=macro_f)
+    step_line = next(ln for ln in out.splitlines() if ln.startswith("| STEPINDEX |"))
+    jd10_line = next(ln for ln in out.splitlines() if ln.startswith("| JD10 |"))
+    assert "✅ YES" in step_line
+    assert "❌ NO" in jd10_line
+
+

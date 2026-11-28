@@ -314,6 +314,53 @@ class StatusTableReporter:
             rows,
         )
 
+    def _evaluate_m15_viability_from_cache(self, symbol: str, info: Dict[str, Any]) -> bool:
+        """
+        Evaluates $100 nano-lot viability using M15 intraday execution stop (1.5 * ATR_14_M15)
+        with PositionSizer's 1.50x Jump-Index gap-slippage buffer:
+        min_lot_size * point_value * (1.5 * ATR_14_M15 * jump_mult) <= $2.00.
+        """
+        from src.risk.pip_calculator import PipCalculator
+        from src.risk.position_sizer import PositionSizer
+
+        m15_atr = info.get("m15_atr_14")
+        ref_price = None
+
+        try:
+            with self.db.get_connection() as conn:
+                rows = conn.execute(
+                    "SELECT high, low, close FROM candles WHERE symbol = ? AND timeframe = 'M15' ORDER BY epoch DESC LIMIT 30",
+                    (symbol,),
+                ).fetchall()
+            if len(rows) >= 14:
+                ordered = list(reversed(rows))
+                ref_price = float(ordered[-1]["close"])
+                trs = []
+                for i in range(len(ordered)):
+                    hi = float(ordered[i]["high"])
+                    lo = float(ordered[i]["low"])
+                    if i == 0:
+                        trs.append(hi - lo)
+                    else:
+                        prev_c = float(ordered[i - 1]["close"])
+                        trs.append(max(hi - lo, abs(hi - prev_c), abs(lo - prev_c)))
+                m15_atr = sum(trs[-14:]) / 14.0
+        except Exception:
+            pass
+
+        if m15_atr is None or float(m15_atr) <= 0:
+            return bool(info.get("nano_lot_viable", False))
+
+        if ref_price is None or ref_price <= 0:
+            inval = float(info.get("key_invalidation_level") or 0.0)
+            targ = float(info.get("macro_target") or 0.0)
+            ref_price = (inval + targ) / 2.0 if (inval > 0 and targ > 0) else 2500.0
+
+        sizer = PositionSizer(PipCalculator())
+        exec_sl_dist = 1.5 * float(m15_atr)
+        viable, _ = sizer.is_viable_for_account(symbol, 100.0, ref_price, ref_price - exec_sl_dist)
+        return bool(viable)
+
     def _build_table_4_macro(self) -> str:
         macro_json = self._load_json(self.macro_bias_path)
         instruments = macro_json.get("instruments", {})
@@ -321,7 +368,7 @@ class StatusTableReporter:
 
         for sym, info in instruments.items():
             conf = float(info.get("confidence_score", 0.0)) * 100.0
-            viable = "✅ YES" if info.get("nano_lot_viable", False) else "❌ NO"
+            viable = "✅ YES" if self._evaluate_m15_viability_from_cache(sym, info) else "❌ NO"
             hurst_val = info.get("hurst")
             adx_val = info.get("adx_14")
             hurst_str = f"{float(hurst_val):.2f}" if hurst_val is not None else "-"

@@ -1,6 +1,6 @@
 # 🏛 CAPITAL ADVISOR — $100 LIVE EXECUTION BLUEPRINT
 *Auto-updated every hour by the Execution & Risk Desk (`hourly_execution_desk.yml`)*  
-*Last Refresh: **2026-11-28 09:46:45 UTC***
+*Last Refresh: **2026-11-28 10:39:26 UTC***
 
 ---
 
@@ -31,7 +31,7 @@
 | **Recommended Lot Size** | **`0.0 lots`** | Granular nano-lot execution |
 | **Dollar Risk ($)** | **`$0.00`** | **0.0%** of $100 equity |
 | **Required Margin** | `$0.00` | Leverage 1:1000 |
-| **Entry Zone** | **`STANDBY @ 7388.65 (Awaiting H4 Confluence)`** | Structural ATR-calibrated entry band |
+| **Entry Zone** | **`STANDBY @ 7423.50 (Awaiting H4 Confluence)`** | Structural ATR-calibrated entry band |
 | **Stop Loss (SL)** | **`N/A (Standby)`** | 0.00 points distance |
 | **Take Profit 1 (TP1)** | **`N/A (Standby)`** | Planned R:R: **N/A (No Active Setup)** |
 | **Take Profit 2 (TP2)** | **`N/A (Standby)`** | Major liquidity pool |
@@ -41,10 +41,7 @@
 ---
 
 ## 🔍 4. CONFLUENCE SIGNALS
-- Structure: Bearish LL/LH structure progression
-- POI: H4 BULLISH_IFVG [7529.93-7533.58] (NO_IDM_NEEDED)
-- Inducement Warning: Unswept IDM at 7574.9919 resting in front of Bearish POI
-- Candlestick Trigger: INSIDE_BAR_BULLISH_BREAKOUT
+- VOLATILITY_SHOCK_PAUSE (2 H1 bars): Single-candle range spike 4.78x > 3.0x ATR_14
 
 ---
 
@@ -53,7 +50,6 @@
 
 
 ### Why Other Indices Were Disqualified on $100 Capital
-- **R_100**: DISQUALIFIED_ON_$100: Minimum lot 0.5 on R_100 with 20.73 pt SL risks $10.37 (10.4%), exceeding $2.00 hard cap.
-- **BOOM1000**: DISQUALIFIED_ON_$100: Minimum lot 0.2 on BOOM1000 with 108.33 pt SL risks $21.67 (21.7%), exceeding $2.00 hard cap.
-- **CRASH1000**: DISQUALIFIED_ON_$100: Minimum lot 0.2 on CRASH1000 with 53.86 pt SL risks $10.77 (10.8%), exceeding $2.00 hard cap.
+- **JD10**: DISQUALIFIED_ON_$100: Minimum lot 0.01 on JD10 with 178.43 pt SL (x1.50 Jump gap buffer=267.64 pt) risks $2.68 (2.7%), exceeding $2.00 hard cap.
+- **CRASH1000**: DISQUALIFIED_ON_$100: Minimum lot 0.2 on CRASH1000 with 13.36 pt SL risks $2.67 (2.7%), exceeding $2.00 hard cap.
 

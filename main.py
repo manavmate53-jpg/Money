@@ -277,6 +277,7 @@ def cycle_macro(symbols_list: list = None) -> dict:
         console.print(f"[cyan]Scanning Macro Structure for {sym}...[/cyan]")
         h1_data = scraper.capture_chart(sym, timeframe="H1", headless=True)
         df_h1 = h1_data["candles_df"]
+        df_m15 = scraper.ws_interceptor.get_candles(sym, timeframe="M15", count=100)
         df_h4 = scraper.ws_interceptor.get_candles(sym, timeframe="H4", count=100)
         screenshot = h1_data["screenshot_path"]
 
@@ -288,7 +289,13 @@ def cycle_macro(symbols_list: list = None) -> dict:
         poi_res = poi_engine.analyze(df_h1, df_h4=df_h4)
 
         curr_p = float(df_h1["close"].iloc[-1])
-        sl_probe = curr_p - (1.5 * (pa_res["atr_14"] or 1.0))
+        m15_atr_14 = (
+            float(pa.calculate_atr(df_m15).iloc[-1])
+            if (df_m15 is not None and len(df_m15) >= 14)
+            else ((pa_res["atr_14"] or 1.0) * 0.5)
+        )
+        # Evaluate $100 nano-lot viability strictly on M15 execution SL (1.5 * ATR_14_M15) + 1.50x Jump buffer
+        sl_probe = curr_p - (1.5 * m15_atr_14)
         viable_flag, _ = PositionSizer(PipCalculator()).is_viable_for_account(sym, 100.0, curr_p, sl_probe)
 
         summary = {
@@ -332,6 +339,7 @@ def cycle_macro(symbols_list: list = None) -> dict:
         eval_res["hurst"] = reg_m.get("hurst")
         eval_res["adx_14"] = reg_m.get("adx_14")
         eval_res["efficiency_ratio"] = reg_m.get("efficiency_ratio")
+        eval_res["m15_atr_14"] = round(m15_atr_14, 4)
         eval_res["nano_lot_viable"] = viable_flag
         macro_map["instruments"][sym] = eval_res
 

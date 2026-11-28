@@ -124,7 +124,7 @@ class DerivWsInterceptor:
                         df = df.sort_values("epoch").reset_index(drop=True)
                         self.last_source = url
 
-                        if self.db:
+                        if self.db and not getattr(self.db, "read_only", False):
                             self._save_candles_to_db(symbol, timeframe, records)
                         return df
             except Exception as e:
@@ -173,9 +173,10 @@ class DerivWsInterceptor:
         start_price = base_prices.get(symbol, 2500.0)
         granularity = self.TIMEFRAME_GRANULARITY.get(timeframe.upper(), 3600)
 
-        vol_scale = 0.008 if "10" in symbol else (0.015 if "25" in symbol else 0.025)
+        hourly_sigma = 0.008 if "10" in symbol else (0.015 if "25" in symbol else 0.025)
         if symbol in ("STEPINDEX", "STPRNG"):
-            vol_scale = 0.002
+            hourly_sigma = 0.0008
+        vol_scale = hourly_sigma * float(np.sqrt(granularity / 3600.0))
 
         current_time = int(time.time()) - (count * granularity)
         records = []
@@ -230,6 +231,22 @@ class DerivWsInterceptor:
         if df is not None and len(df) >= 30:
             self._candle_cache[cache_key] = (now_ts, df)
             return df.copy()
+        if self.db is not None:
+            try:
+                with self.db.get_connection() as conn:
+                    cached_df = pd.read_sql_query(
+                        "SELECT epoch, open, high, low, close, volume FROM candles "
+                        "WHERE symbol = ? AND timeframe = ? ORDER BY epoch DESC LIMIT ?",
+                        conn,
+                        params=(symbol.upper(), timeframe.upper(), count),
+                    )
+                if len(cached_df) >= 30:
+                    cached_df = cached_df.sort_values("epoch").reset_index(drop=True)
+                    cached_df["datetime"] = pd.to_datetime(cached_df["epoch"], unit="s")
+                    self.last_source = "SQLITE_CACHE_FALLBACK"
+                    return cached_df
+            except Exception:
+                pass
         return self.generate_synthetic_candles(symbol, timeframe, count)
 
     async def fetch_historical_candles_days(

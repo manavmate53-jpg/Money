@@ -169,7 +169,11 @@ class CapitalAdvisor:
             if tip.direction == "NEUTRAL_NO_TRADE":
                 continue
 
-            entry_price = tip.entry_max if tip.direction == "BULLISH" else tip.entry_min
+            entry_price = (
+                tip.current_price
+                if tip.entry_mode == "MARKET_CONFIRMATION"
+                else (tip.entry_max if tip.direction == "BULLISH" else tip.entry_min)
+            )
             viability = self.position_sizer.evaluate_instrument_viability(
                 symbol=symbol,
                 entry_price=entry_price,
@@ -178,15 +182,18 @@ class CapitalAdvisor:
                 risk_percent=1.5
             )
 
-            if not viability["viable"] or float(viability["actual_dollar_risk"]) > (max_live_risk_dollars + 1e-6):
+            actual_or_min_risk = float(
+                viability.get("min_lot_dollar_risk", viability.get("actual_dollar_risk", 0.0))
+            )
+            if not viability["viable"] or float(viability.get("actual_dollar_risk", actual_or_min_risk)) > (max_live_risk_dollars + 1e-6):
                 reason_msg = viability["rejection_reason"] or (
-                    f"DISQUALIFIED_ON_${capital:.0f}: Risk ${viability['actual_dollar_risk']:.2f} "
+                    f"DISQUALIFIED_ON_${capital:.0f}: Risk ${float(viability.get('actual_dollar_risk', actual_or_min_risk)):.2f} "
                     f"exceeds live advisor ${max_live_risk_dollars:.2f} (1.5%) ceiling"
                 )
                 disqualified.append({
                     "symbol": symbol,
                     "reason": reason_msg,
-                    "min_lot_risk": viability["min_lot_dollar_risk"]
+                    "min_lot_risk": actual_or_min_risk,
                 })
             else:
                 score = (tip.confidence_score * 0.6) + (min(3.5, tip.risk_reward_ratio) / 3.5 * 0.4)

@@ -501,14 +501,17 @@ class ConfluenceEngine:
                         entry_max = round(current_price + atr_band_width, 2)
                 entry_ref = entry_max if direction == "BULLISH" else entry_min
 
+            # Use M15 execution ATR when M15 candles are available (avoid wide H4/H1 SL sizing)
+            exec_atr = m15_atr if (m15_df is not None and len(m15_df) >= 10) else atr_14
+
             if direction == "BULLISH":
-                raw_sl = (entry_min - (sl_buf_mult * atr_14)) if anchor_zone else (entry_max - (1.5 * atr_14))
+                raw_sl = (entry_min - (sl_buf_mult * exec_atr)) if anchor_zone else (entry_max - (1.5 * exec_atr))
                 sweep_ext = bull_sweep["wick_extreme"] if bull_sweep else None
                 if is_jump or sweep_ext is not None:
-                    min_jump_dist = (jump_sl_mult if is_jump else 1.0) * atr_14
+                    min_jump_dist = (jump_sl_mult if is_jump else 1.5) * exec_atr
                     floor_candidates = [raw_sl, entry_ref - min_jump_dist]
                     if sweep_ext is not None:
-                        floor_candidates.append(sweep_ext - (0.35 * atr_14))
+                        floor_candidates.append(max(entry_ref - (2.5 * exec_atr), sweep_ext - (0.35 * exec_atr)))
                     sl = round(min(floor_candidates), 2)
                 else:
                     sl = round(raw_sl, 2)
@@ -521,13 +524,13 @@ class ConfluenceEngine:
                 tp2 = round(min(ext_targets), 2) if ext_targets else round(entry_ref + (max(4.0, rr_target + 1.5) * sl_dist), 2)
                 be_trigger = round(entry_ref + (1.0 * sl_dist), 2)
             else:
-                raw_sl = (entry_max + (sl_buf_mult * atr_14)) if anchor_zone else (entry_min + (1.5 * atr_14))
+                raw_sl = (entry_max + (sl_buf_mult * exec_atr)) if anchor_zone else (entry_min + (1.5 * exec_atr))
                 sweep_ext = bear_sweep["wick_extreme"] if bear_sweep else None
                 if is_jump or sweep_ext is not None:
-                    min_jump_dist = (jump_sl_mult if is_jump else 1.0) * atr_14
+                    min_jump_dist = (jump_sl_mult if is_jump else 1.5) * exec_atr
                     ceil_candidates = [raw_sl, entry_ref + min_jump_dist]
                     if sweep_ext is not None:
-                        ceil_candidates.append(sweep_ext + (0.35 * atr_14))
+                        ceil_candidates.append(min(entry_ref + (2.5 * exec_atr), sweep_ext + (0.35 * exec_atr)))
                     sl = round(max(ceil_candidates), 2)
                 else:
                     sl = round(raw_sl, 2)
